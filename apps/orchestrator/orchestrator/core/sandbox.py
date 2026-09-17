@@ -1,6 +1,6 @@
-"""
-Sandboxing system for AI-generated code execution
-Implements nsjail/firejail-based isolation with resource limits
+"""Experimental isolation layer for locally generated renderer code.
+
+Execution fails closed when the configured isolation backend is unavailable.
 """
 
 import json
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 import subprocess
 import shlex
+import shutil
 
 from .observability import process_manager, RetryableOperation
 from .dsl_models import LogLevel, PipelineLogEntry
@@ -42,15 +43,17 @@ class CodeSandbox:
             'shutil.rmtree', '__import__'
         }
     
-    def create_sandbox_profile(self, profile_name: str = "physics_foundry") -> Path:
-        """Create nsjail/firejail profile for physics video generation"""
-        
-        profile_content = ""
-        
+    def create_sandbox_profile(
+        self, workspace: Path, profile_name: str = "physics_foundry"
+    ) -> Path:
+        """Create an isolation profile bound to one workspace."""
+
         if self.sandbox_type == "nsjail":
-            profile_content = self._create_nsjail_config()
-        else:  # firejail
+            profile_content = self._create_nsjail_config(workspace)
+        elif self.sandbox_type == "firejail":
             profile_content = self._create_firejail_profile()
+        else:
+            raise ValueError(f"Unsupported sandbox type: {self.sandbox_type}")
         
         # Write profile to temp file
         profile_path = Path(f"/tmp/{profile_name}.{self.sandbox_type}")
@@ -60,8 +63,8 @@ class CodeSandbox:
         logger.info(f"Created {self.sandbox_type} profile: {profile_path}")
         return profile_path
     
-    def _create_nsjail_config(self) -> str:
-        """Create nsjail configuration for secure execution"""
+    def _create_nsjail_config(self, workspace: Path) -> str:
+        """Create an nsjail configuration for one concrete workspace."""
         return f"""
 name: "physics_foundry"
 description: "Sandbox for AI-generated physics code"
@@ -91,8 +94,8 @@ keep_env: false
 pass_fd: []
 
 mount {{
-    src: "/tmp/sandbox_workspace"
-    dst: "/workspace" 
+    src: "{workspace.as_posix()}"
+    dst: "/workspace"
     is_bind: true
     rw: true
 }}
@@ -136,7 +139,6 @@ private-etc passwd,group,hostname,hosts,nsswitch.conf,resolv.conf
 # Python specific
 whitelist /usr/bin/python3
 whitelist /usr/lib/python3
-whitelist /tmp/sandbox_workspace
 
 # No X11, audio, or other services
 disable-mnt
@@ -195,25 +197,41 @@ seccomp !chroot
             }
         
         # Create workspace
-        workspace = Path(f"/tmp/sandbox_workspace_{execution_id}")
+        workspace = Path(f"/tmp/sandbox_workspace_{execution_id}").resolve()
         workspace.mkdir(exist_ok=True)
         self.temp_dirs.append(workspace)
-        
+        profile_path: Optional[Path] = None
+
+        def workspace_path(relative_name: str) -> Path:
+            relative = Path(relative_name)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(
+                    "Sandbox file paths must be relative and may not traverse upward"
+                )
+            candidate = (workspace / relative).resolve()
+            if candidate != workspace and workspace not in candidate.parents:
+                raise ValueError("Sandbox file path escaped the workspace")
+            return candidate
+
         try:
-            # Write main script
-            script_path = workspace / script_name
-            with open(script_path, 'w') as f:
-                f.write(code)
-            
-            # Write extra files
+            # Write main script.
+            script_path = workspace_path(script_name)
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(script_path, "w", encoding="utf-8") as handle:
+                handle.write(code)
+
+            # Write optional support files without allowing path traversal.
             if extra_files:
                 for filename, content in extra_files.items():
-                    file_path = workspace / filename
-                    with open(file_path, 'w') as f:
-                        f.write(content)
-            
-            # Create sandbox profile
-            profile_path = self.create_sandbox_profile(f"profile_{execution_id}")
+                    file_path = workspace_path(filename)
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(file_path, "w", encoding="utf-8") as handle:
+                        handle.write(content)
+
+            # Create sandbox profile.
+            profile_path = self.create_sandbox_profile(
+                workspace, f"profile_{execution_id}"
+            )
             
             # Build execution command
             if self.sandbox_type == "nsjail":
@@ -260,8 +278,8 @@ seccomp !chroot
             }
         
         finally:
-            # Cleanup
-            if profile_path.exists():
+            # Cleanup the ephemeral profile even when setup fails partway through.
+            if profile_path is not None and profile_path.exists():
                 profile_path.unlink()
     
     def _validate_code_safety(self, code: str) -> Dict[str, Any]:
@@ -358,16 +376,21 @@ seccomp !chroot
                 f.write(profile_content)
             
             # Wrap in sandbox
-            if self.sandbox_type == "firejail":
-                sandbox_cmd = [
-                    'firejail',
-                    f'--profile={profile_path}',
-                    f'--private={workspace}',
-                ] + cmd
-            else:
-                # For nsjail, would need more complex setup
-                sandbox_cmd = cmd  # Fallback to direct execution
-                logger.warning("Blender sandbox not fully implemented for nsjail")
+            if self.sandbox_type != "firejail":
+                return {
+                    "success": False,
+                    "error": (
+                        "Blender execution requires the firejail backend; "
+                        "direct unsandboxed fallback is intentionally disabled"
+                    ),
+                    "execution_id": execution_id,
+                }
+
+            sandbox_cmd = [
+                "firejail",
+                f"--profile={profile_path}",
+                f"--private={workspace}",
+            ] + cmd
             
             result = await process_manager.run_with_timeout(
                 sandbox_cmd,
@@ -500,8 +523,15 @@ async def execute_safe_code(
     """
     High-level interface for safe code execution
     """
-    sandbox = sandbox_manager.get_sandbox("firejail")  # firejail more portable than nsjail
-    
+    if shutil.which("firejail") is None:
+        return {
+            "success": False,
+            "error": "firejail is required for local code execution but was not found",
+            "execution_id": "unavailable",
+        }
+
+    sandbox = sandbox_manager.get_sandbox("firejail")
+
     if code_type == "python":
         return await sandbox.execute_python_code(code, timeout=timeout, extra_files=extra_files)
     elif code_type == "blender":
