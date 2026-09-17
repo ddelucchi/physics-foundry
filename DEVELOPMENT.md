@@ -21,8 +21,6 @@ npm run dev:gui
 Quality checks:
 
 ```bash
-npm run lint
-npm run format:check
 npm test
 npm run build
 ```
