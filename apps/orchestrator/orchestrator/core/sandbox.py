@@ -3,24 +3,19 @@
 Execution fails closed when the configured isolation backend is unavailable.
 """
 
-import json
 import logging
-import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-import subprocess
-import shlex
+from typing import Any, Dict, List, Optional
 import shutil
 
-from .observability import process_manager, RetryableOperation
-from .dsl_models import LogLevel, PipelineLogEntry
+from .observability import process_manager
 
 logger = logging.getLogger(__name__)
 
 
 class CodeSandbox:
-    """Secure sandbox for executing AI-generated code"""
+    """Isolation wrapper for locally generated code."""
     
     def __init__(self, sandbox_type: str = "nsjail"):
         self.sandbox_type = sandbox_type
@@ -457,7 +452,6 @@ notv
         for ws in [workspace, blender_workspace]:
             if ws.exists():
                 try:
-                    import shutil
                     shutil.rmtree(ws)
                     logger.info(f"Cleaned up workspace: {ws}")
                 except Exception as e:
@@ -468,7 +462,6 @@ notv
         for temp_dir in self.temp_dirs:
             if temp_dir.exists():
                 try:
-                    import shutil
                     shutil.rmtree(temp_dir)
                 except Exception as e:
                     logger.error(f"Failed to cleanup {temp_dir}: {e}")
@@ -520,9 +513,7 @@ async def execute_safe_code(
     timeout: Optional[float] = None,
     extra_files: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
-    """
-    High-level interface for safe code execution
-    """
+    """Execute code only through an available isolation backend."""
     if shutil.which("firejail") is None:
         return {
             "success": False,
