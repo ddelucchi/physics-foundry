@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "physics-foundry-orchestrator"
 version = "0.2.0"
-description = "Production-grade FastAPI orchestrator for physics video generation pipeline"
-authors = ["Physics Foundry <team@physics-foundry.com>"]
+description = "Research-prototype FastAPI orchestrator for AI-assisted physics visualization workflows"
+authors = ["Daxx Delucchi"]
 
 [tool.poetry.dependencies]
 python = "^3.11,<3.13"
