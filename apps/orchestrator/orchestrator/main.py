@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .core.dsl_models import (
@@ -363,8 +363,8 @@ async def process_pipeline(pipeline_id: str, request: SceneRequest):
     try:
         async with observability_manager.trace_operation(
             "process_pipeline",
-            {"pipeline_id": pipeline_id, "topic": request.topic}
-        ) as span:
+            {"pipeline_id": pipeline_id, "topic": request.topic},
+        ):
             
             # Step 1: Plan content
             await update_pipeline_status(
@@ -374,7 +374,7 @@ async def process_pipeline(pipeline_id: str, request: SceneRequest):
                 "Planning video content structure"
             )
             
-            # Simulate planning with LLM
+            # Simulate the planning stage without claiming a live model call.
             await asyncio.sleep(2)
             
             # Step 2: Generate script
@@ -382,7 +382,7 @@ async def process_pipeline(pipeline_id: str, request: SceneRequest):
                 pipeline_id,
                 "scripting", 
                 2, 10,
-                "Generating video script with LLM"
+                "Generating deterministic prototype script plan"
             )
             
             # Build a deterministic prototype script in-process. Prompt fields are
