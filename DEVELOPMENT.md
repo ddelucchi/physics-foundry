@@ -14,9 +14,8 @@ A GPU is optional for the core GUI/orchestrator development path.
 ## GUI
 
 ```bash
-cd apps/gui
 npm ci
-npm run dev
+npm run dev:gui
 ```
 
 Quality checks:
