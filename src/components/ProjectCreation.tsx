@@ -142,7 +142,7 @@ export default function ProjectCreation({ open, onOpenChange, onCreateProject }:
                       <SelectItem value="high">
                         <div className="space-y-1">
                           <div>High</div>
-                          <div className="text-xs text-muted-foreground">Production ready</div>
+                          <div className="text-xs text-muted-foreground">High fidelity</div>
                         </div>
                       </SelectItem>
                     </SelectContent>
