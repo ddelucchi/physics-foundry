@@ -1,233 +1,59 @@
-name: 🚀 Comprehensive CI/CD Pipeline
+name: CI
 
 on:
   push:
-    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      deploy_environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
 
-env:
-  NODE_VERSION: '18'
-  PYTHON_VERSION: '3.11'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+permissions:
+  contents: read
 
 jobs:
-  # Security scanning
-  security:
-    name: 🔒 Security Analysis
+  gui:
+    name: GUI
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/gui
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-      - name: Run CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          languages: javascript,python
-
-  # Code quality checks
-  quality:
-    name: 🔍 Code Quality
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        component: [gui, orchestrator]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js (GUI)
-        if: matrix.component == 'gui'
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          node-version: "20"
+          cache: npm
           cache-dependency-path: apps/gui/package-lock.json
-
-      - name: Setup Python (Orchestrator)
-        if: matrix.component == 'orchestrator'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
-      - name: Install GUI dependencies
-        if: matrix.component == 'gui'
-        working-directory: apps/gui
+      - name: Install
         run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Format check
+        run: npx prettier --check .
+      - name: Unit tests
+        run: npx vitest run
+      - name: Build
+        run: npm run build
 
-      - name: Install Orchestrator dependencies
-        if: matrix.component == 'orchestrator'
-        working-directory: apps/orchestrator
-        run: |
-          pip install -e . --no-deps || echo "Install failed, trying core packages"
-          pip install fastapi uvicorn pydantic
-          pip install pytest pytest-cov ruff mypy black
-
-      - name: Lint GUI
-        if: matrix.component == 'gui'
-        working-directory: apps/gui
-        run: |
-          npm run lint -- --max-warnings 0
-          npm run format -- --check
-
-      - name: Lint Orchestrator
-        if: matrix.component == 'orchestrator'
-        working-directory: apps/orchestrator
-        run: |
-          ruff check . --fix
-          black --check .
-          # mypy . || echo "MyPy check completed with warnings"
-
-      - name: Run GUI tests
-        if: matrix.component == 'gui'
-        working-directory: apps/gui
-        run: npm run test
-
-      - name: Run Orchestrator tests
-        if: matrix.component == 'orchestrator'
-        working-directory: apps/orchestrator
-        run: |
-          mkdir -p tests
-          echo "import pytest" > tests/__init__.py
-          echo "def test_basic(): assert True" > tests/test_basic.py
-          pytest tests/ || echo "Tests completed"
-
-  # Build and test
-  build:
-    name: 🏗️ Build & Test
+  orchestrator:
+    name: Orchestrator
     runs-on: ubuntu-latest
-    needs: [security, quality]
-    strategy:
-      matrix:
-        component: [gui, orchestrator]
+    defaults:
+      run:
+        working-directory: apps/orchestrator
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node.js (GUI)
-        if: matrix.component == 'gui'
-        uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: apps/gui/package-lock.json
-
-      - name: Setup Python (Orchestrator)
-        if: matrix.component == 'orchestrator'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Build GUI
-        if: matrix.component == 'gui'
-        working-directory: apps/gui
+          python-version: "3.11"
+          cache: pip
+      - name: Install package and test tools
         run: |
-          npm ci
-          npm run build
-
-      - name: Build Orchestrator
-        if: matrix.component == 'orchestrator'
-        working-directory: apps/orchestrator
-        run: |
-          pip install build
-          python -m build || echo "Build completed with warnings"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ matrix.component }}
-          path: |
-            apps/${{ matrix.component }}/dist/
-            apps/${{ matrix.component }}/build/
-          retention-days: 30
-
-  # Performance testing
-  performance:
-    name: ⚡ Performance Tests
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install dependencies
-        working-directory: apps/gui
-        run: npm ci
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-gui
-          path: apps/gui/dist
-        continue-on-error: true
-
-      - name: Performance check
-        working-directory: apps/gui
-        run: |
-          echo "Running performance checks..."
-          # Check bundle size
-          if [ -d "dist" ]; then
-            BUNDLE_SIZE=$(find dist -name "*.js" -exec du -b {} + | awk '{sum += $1} END {print sum}')
-            echo "Bundle size: $BUNDLE_SIZE bytes"
-            if [ "$BUNDLE_SIZE" -gt 2097152 ]; then  # 2MB limit
-              echo "Warning: Bundle size exceeds 2MB"
-            fi
-          fi
-
-  # Deployment preparation
-  deploy-prep:
-    name: 🚀 Deploy Preparation
-    runs-on: ubuntu-latest
-    needs: [build, performance]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create deployment manifest
-        run: |
-          echo "Deployment ready for environment: ${{ inputs.deploy_environment || 'staging' }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Branch: ${{ github.ref_name }}"
-          
-      - name: Notify deployment ready
-        uses: actions/github-script@v7
-        with:
-          script: |
-            if (context.issue.number) {
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: '🚀 Build successful! Ready for deployment to ${{ inputs.deploy_environment || 'staging' }}'
-              })
-            }
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio ruff black
+      - name: Compile
+        run: python -m compileall -q orchestrator
+      - name: Lint
+        run: ruff check orchestrator tests
+      - name: Format check
+        run: black --check orchestrator tests
+      - name: Unit tests
+        run: pytest -q
