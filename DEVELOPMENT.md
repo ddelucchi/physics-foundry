@@ -72,8 +72,6 @@ The justfile intentionally contains only commands backed by the current reposito
 - `docs` contains design notes and target-state documents.
 - `scripts` contains supporting local utilities.
 
-Some older root-level frontend files remain from an earlier project layout. They are not the canonical GUI surface.
-
 ## Contribution standard
 
 A new feature should:
