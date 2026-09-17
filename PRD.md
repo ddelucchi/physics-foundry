@@ -1,5 +1,7 @@
 # Physics Video Pipeline Control Center
 
+> **Document status:** target-state product/design document. The repository [README](README.md) is authoritative for what is implemented today. Features described below may be planned, partial, mocked, or experimental and must not be read as current production capabilities.
+
 A comprehensive control interface for managing a fully local, AI-driven physics video production pipeline that transforms topics into publishable content through automated script generation, multi-engine rendering, and self-review loops.
 
 **Experience Qualities**:
