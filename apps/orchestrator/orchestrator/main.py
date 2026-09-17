@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Physics Foundry Orchestrator",
     version="0.2.0",
-    description="Production-grade physics video generation pipeline",
+    description="Research-prototype physics visualization orchestration pipeline",
     lifespan=lifespan
 )
 
