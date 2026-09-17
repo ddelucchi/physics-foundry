@@ -1,4 +1,4 @@
-# Physics Foundry - Production-ready dependency specification
+# Physics Foundry - Research-prototype dependency specification
 # Use pip-compile to generate requirements.txt with exact versions
 # Run: pip-compile requirements.in
 
