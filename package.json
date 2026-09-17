@@ -1,32 +1,24 @@
 {
-    "name": "physics-foundry",
-    "private": true,
-    "version": "0.1.0",
-    "type": "module",
-    "workspaces": {
-        "packages": [
-            "apps/gui",
-            "apps/orchestrator",
-            "packages/*"
-        ]
-    },
-    "scripts": {
-        "dev": "just dev-all",
-        "dev:gui": "just dev-gui", 
-        "dev:api": "just dev-api",
-        "build": "just build",
-        "test": "just test",
-        "lint": "just lint",
-        "format": "just format",
-        "setup": "just setup",
-        "check": "just check"
-    },
-    "devDependencies": {
-        "@types/node": "^20.0.0",
-        "typescript": "~5.7.2"
-    },
-    "engines": {
-        "node": ">=18.0.0",
-        "npm": ">=8.0.0"
-    }
+  "name": "physics-foundry",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/gui"
+  ],
+  "scripts": {
+    "dev:gui": "npm --workspace @physics-foundry/gui run dev",
+    "build": "npm --workspace @physics-foundry/gui run build",
+    "test": "npm --workspace @physics-foundry/gui run test",
+    "lint": "npm --workspace @physics-foundry/gui run lint",
+    "format:check": "npm --workspace @physics-foundry/gui run format:check"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "~5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
 }
