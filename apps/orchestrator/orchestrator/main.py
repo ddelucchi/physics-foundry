@@ -1,11 +1,14 @@
 """
-Physics Foundry FastAPI orchestrator
-Production-grade pipeline with observability, sandboxing, and quality gates
+Physics Foundry FastAPI orchestrator.
+
+Research-prototype orchestration service with observability, quality-analysis,
+and explicitly opt-in sandbox execution.
 """
 
 import asyncio
 import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +17,7 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .core.dsl_models import (
     SceneRequest, PipelineStatus, PipelineLogEntry, LogLevel,
@@ -48,7 +51,7 @@ class SystemStatus(BaseModel):
     gpu_available: bool = False
     sandbox_ready: bool = False
     quality_gates_enabled: bool = True
-    observability: Dict[str, bool] = {}
+    observability: Dict[str, bool] = Field(default_factory=dict)
 
 
 class PipelineConfig(BaseModel):
@@ -59,11 +62,13 @@ class PipelineConfig(BaseModel):
     target_framerate: int = 30
     ocio_config: Optional[str] = None
     enable_sandbox: bool = True
-    quality_thresholds: Dict[str, float] = {
-        'ssim_minimum': 0.85,
-        'vmaf_minimum': 70.0,
-        'text_legibility_minimum': 0.80
-    }
+    quality_thresholds: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "ssim_minimum": 0.85,
+            "vmaf_minimum": 70.0,
+            "text_legibility_minimum": 0.80,
+        }
+    )
 
 
 # Global state
@@ -137,7 +142,7 @@ async def system_status():
         import subprocess
         result = subprocess.run(['nvidia-smi'], capture_output=True)
         gpu_available = result.returncode == 0
-    except:
+    except (OSError, subprocess.SubprocessError):
         pass
     
     # Check OCIO config
@@ -150,7 +155,7 @@ async def system_status():
         version="0.2.0",
         ocio_config=ocio_config if ocio_available else None,
         gpu_available=gpu_available,
-        sandbox_ready=True,  # Always ready with our sandbox implementation
+        sandbox_ready=shutil.which("firejail") is not None,
         quality_gates_enabled=True,
         observability={
             "prometheus": True,
@@ -269,25 +274,43 @@ async def run_quality_check(pipeline_id: str, frame_paths: List[str]):
 async def execute_code_safely(
     code: str,
     code_type: str = "python",
-    timeout: Optional[float] = 60.0
+    timeout: Optional[float] = 60.0,
 ):
-    """Execute code in sandbox environment"""
-    
-    with operation_duration_seconds.labels(operation='code_execution').time():
+    """Execute code only when the local operator explicitly enables the sandbox API."""
+
+    if os.getenv("PHYSICS_FOUNDRY_ENABLE_CODE_EXECUTION", "0") != "1":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Sandbox execution is disabled by default. "
+                "Set PHYSICS_FOUNDRY_ENABLE_CODE_EXECUTION=1 only in a trusted local environment."
+            ),
+        )
+
+    if code_type not in {"python", "blender"}:
+        raise HTTPException(status_code=400, detail="Unsupported code type")
+
+    bounded_timeout = min(max(float(timeout or 60.0), 1.0), 120.0)
+
+    with operation_duration_seconds.labels(operation="code_execution").time():
         try:
-            result = await execute_safe_code(code, code_type, timeout)
-            
+            result = await execute_safe_code(code, code_type, bounded_timeout)
+
             pipeline_operations_total.labels(
                 operation="code_execution",
-                status="success" if result['success'] else "error"
+                status="success" if result["success"] else "error",
             ).inc()
-            
+
             return result
-            
-        except Exception as e:
-            logger.error(f"Code execution failed: {e}")
-            pipeline_operations_total.labels(operation="code_execution", status="error").inc()
-            raise HTTPException(status_code=500, detail=f"Code execution failed: {str(e)}")
+
+        except Exception as exc:
+            logger.error("Code execution failed: %s", exc)
+            pipeline_operations_total.labels(
+                operation="code_execution", status="error"
+            ).inc()
+            raise HTTPException(
+                status_code=500, detail="Sandbox execution failed"
+            ) from exc
 
 
 # WebSocket endpoint for real-time updates
@@ -326,7 +349,7 @@ async def broadcast_pipeline_event(event: Dict):
     for websocket in websocket_connections.copy():
         try:
             await websocket.send_json(event)
-        except:
+        except Exception:
             # Remove dead connections
             if websocket in websocket_connections:
                 websocket_connections.remove(websocket)
@@ -362,81 +385,82 @@ async def process_pipeline(pipeline_id: str, request: SceneRequest):
                 "Generating video script with LLM"
             )
             
-            # Execute script generation code safely
-            script_generation_code = f'''
-import json
-from datetime import datetime
+            # Build a deterministic prototype script in-process. Prompt fields are
+            # data, never source code, so user input cannot alter Python syntax here.
+            script = {
+                "topic": request.topic,
+                "duration": request.duration,
+                "level": request.level.value,
+                "scenes": [
+                    {
+                        "title": "Introduction",
+                        "duration": request.duration * 0.2,
+                        "narration": f"Welcome to our exploration of {request.topic}",
+                        "visuals": "Title animation with topic introduction",
+                    },
+                    {
+                        "title": "Core Concepts",
+                        "duration": request.duration * 0.6,
+                        "narration": (
+                            f"Let's examine the fundamental principles of {request.topic}"
+                        ),
+                        "visuals": "Mathematical equations and diagrams",
+                    },
+                    {
+                        "title": "Summary",
+                        "duration": request.duration * 0.2,
+                        "narration": "Summary of the concepts covered in this prototype plan",
+                        "visuals": "Recap animation",
+                    },
+                ],
+                "generated_at": datetime.utcnow().isoformat(),
+                "prototype": True,
+            }
 
-# Physics video script generation
-topic = "{request.topic}"
-duration = {request.duration}
-level = "{request.level.value}"
+            pipeline.logs.append(
+                PipelineLogEntry(
+                    timestamp=datetime.utcnow(),
+                    level=LogLevel.INFO,
+                    message="Prototype script plan generated",
+                    component="orchestrator",
+                    metadata={"scene_count": len(script["scenes"]), "prototype": True},
+                )
+            )
 
-# Generate structured script
-script = {{
-    "topic": topic,
-    "duration": duration,
-    "level": level,
-    "scenes": [
-        {{
-            "title": "Introduction",
-            "duration": duration * 0.2,
-            "narration": f"Welcome to our exploration of {{topic}}",
-            "visuals": "Title animation with topic introduction"
-        }},
-        {{
-            "title": "Core Concepts", 
-            "duration": duration * 0.6,
-            "narration": f"Let's dive into the fundamental principles of {{topic}}",
-            "visuals": "Mathematical equations and diagrams"
-        }},
-        {{
-            "title": "Summary",
-            "duration": duration * 0.2,
-            "narration": "In summary, we've learned about the key concepts",
-            "visuals": "Recap animation"
-        }}
-    ],
-    "generated_at": datetime.utcnow().isoformat()
-}}
 
-print(json.dumps(script, indent=2))
-'''
-            
-            script_result = await execute_safe_code(script_generation_code, "python", 30.0)
-            
-            if script_result['success']:
-                # Continue with rendering steps
-                for step in range(3, 9):
-                    await update_pipeline_status(
-                        pipeline_id,
-                        "rendering",
-                        step, 10,
-                        f"Rendering segment {step-2}/6"
-                    )
-                    await asyncio.sleep(1)  # Simulate rendering
-                
-                # Final assembly
+            # Continue through simulated rendering states. Renderer execution is
+            # intentionally not claimed by this prototype path.
+            for step in range(3, 9):
                 await update_pipeline_status(
                     pipeline_id,
-                    "assembling", 
-                    9, 10,
-                    "Assembling final video"
+                    "rendering",
+                    step,
+                    10,
+                    f"Simulating render segment {step - 2}/6",
                 )
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 
-                # Complete
-                await update_pipeline_status(
-                    pipeline_id,
-                    "complete",
-                    10, 10,
-                    "Video generation complete"
-                )
-                
-                pipeline_operations_total.labels(operation="process_pipeline", status="success").inc()
-                
-            else:
-                raise Exception(f"Script generation failed: {script_result.get('error', 'Unknown error')}")
+            # Final assembly is also simulated in the current prototype path.
+            await update_pipeline_status(
+                pipeline_id,
+                "assembling",
+                9,
+                10,
+                "Simulating final assembly",
+            )
+            await asyncio.sleep(2)
+
+            await update_pipeline_status(
+                pipeline_id,
+                "complete",
+                10,
+                10,
+                "Prototype pipeline simulation complete",
+            )
+
+            pipeline_operations_total.labels(
+                operation="process_pipeline", status="success"
+            ).inc()
     
     except Exception as e:
         logger.error(f"Pipeline {pipeline_id} failed: {e}")
@@ -511,10 +535,10 @@ async def root():
         "features": [
             "observability_stack",
             "quality_gates",
-            "sandboxed_execution",
+            "opt_in_sandbox_execution",
             "realtime_monitoring",
             "ocio_color_management",
-            "gpu_acceleration_ready"
+            "gpu_capability_detection"
         ],
         "endpoints": {
             "health": "/health",
