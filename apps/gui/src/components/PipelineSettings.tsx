@@ -208,7 +208,7 @@ export default function PipelineSettings() {
                   <SelectContent>
                     <SelectItem value="draft">Draft (Fast iteration)</SelectItem>
                     <SelectItem value="standard">Standard (Balanced)</SelectItem>
-                    <SelectItem value="high">High (Production ready)</SelectItem>
+                    <SelectItem value="high">High (High fidelity)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
