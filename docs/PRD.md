@@ -1,5 +1,7 @@
 # Physics Foundry - Product Requirements Document
 
+> **Document status:** target-state architecture and product requirements. The repository [README](../README.md) is authoritative for current implementation status. Checkboxes and aspirational KPIs below are design targets, not independently verified performance claims.
+
 ## Overview
 
 Physics Foundry is a **modular, error-coded, multi-model, fully-local** commercial-ready physics video generation pipeline. It leverages **multiple LLMs via OpenAI-compatible local servers**, live token streaming, **headless Blender (Cycles CUDA/OptiX)**, **Manim (OpenGL/Cairo)**, **Taichi (CUDA/GPU autoselect)**, **OpenTimelineIO** as timeline authority, **OCIO** color management, **FFmpeg** with hardware acceleration, **Whisper.cpp** and **Montreal Forced Aligner** for precise audio synchronization, **Piper TTS** for offline narration, and **Prometheus + OpenTelemetry** for comprehensive observability.
