@@ -69,9 +69,9 @@ On Windows, activate the virtual environment with `.venv\Scripts\activate`.
 
 ## CI policy
 
-The repository CI is intentionally strict: build, lint, format, or test failures are failures. The previous workflow pattern that swallowed failures with shell fallbacks has been removed.
+The repository CI is intentionally fail-hard: frontend tests/builds and backend syntax/unit tests are failures when their commands fail. The previous workflow pattern that swallowed failures with shell fallbacks has been removed.
 
-CI validates the software that actually exists. It does not manufacture placeholder tests during the workflow.
+CI validates the software that actually exists. It does not manufacture placeholder tests during the workflow. Full renderer/media dependency integration remains outside this lightweight hosted gate.
 
 ## Design principles
 
