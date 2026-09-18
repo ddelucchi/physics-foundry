@@ -48,3 +48,11 @@ Physics Foundry is an active prototype. This ledger distinguishes implemented ar
 The hardening branch's current Actions runs are terminating before checkout with zero reported job steps and no available job-log blob. That is tracked as an infrastructure/runner failure and is not counted as evidence that the dependency-light tests passed or failed.
 
 The next evidence milestone is issue #17: one real retained Manim artifact chain. Sandbox runtime hardening/verification remains tracked by issue #27. Fixture completion and deterministic GUI demonstrations are deliberately not counted as rendered-video completion.
+
+
+### Post-release sandbox hardening
+
+- closed an auxiliary-file validation-to-use gap by reserving the validated entry-script path during staging;
+- minimized the environment inherited by the Firejail parent process;
+- added behavioral tests for both contracts;
+- bounded-output streaming remains an open denial-of-service hardening item.
