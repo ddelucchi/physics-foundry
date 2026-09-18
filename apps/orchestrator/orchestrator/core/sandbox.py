@@ -108,15 +108,31 @@ novideo
         profile_path.write_text(self._create_firejail_profile(), encoding="utf-8")
         return profile_path
 
-    def _write_extra_files(self, workspace: Path, extra_files: Dict[str, str]) -> None:
-        """Stage caller-provided text files without permitting path traversal."""
+    def _write_extra_files(
+        self,
+        workspace: Path,
+        extra_files: Dict[str, str],
+        *,
+        reserved_paths: Optional[set[str]] = None,
+    ) -> None:
+        """Stage auxiliary text without traversal or entry-script replacement."""
+
+        reserved = reserved_paths or set()
+        seen: set[str] = set()
 
         for filename, content in extra_files.items():
             validation = validate_workspace_path(filename)
             if not validation["safe"]:
                 raise ValueError(f"Invalid staged file {filename!r}: {validation['reason']}")
 
-            destination = workspace / validation["path"]
+            relative = validation["path"]
+            if relative in reserved:
+                raise ValueError(f"Staged file {filename!r} collides with a reserved execution path")
+            if relative in seen:
+                raise ValueError(f"Duplicate staged file path: {filename!r}")
+            seen.add(relative)
+
+            destination = workspace / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(content, encoding="utf-8")
 
@@ -182,7 +198,11 @@ novideo
             script_path.write_text(code, encoding="utf-8")
 
             if extra_files:
-                self._write_extra_files(workspace, extra_files)
+                self._write_extra_files(
+                    workspace,
+                    extra_files,
+                    reserved_paths={relative_script.as_posix()},
+                )
 
             profile_path = self.create_sandbox_profile(
                 workspace,
@@ -207,6 +227,11 @@ novideo
                 command,
                 timeout=effective_timeout,
                 process_id=f"sandbox_{execution_id}",
+                env={
+                    "PATH": "/usr/bin:/bin",
+                    "HOME": str(workspace),
+                    "LANG": "C.UTF-8",
+                },
             )
 
             return {
@@ -317,6 +342,11 @@ novideo
                 command,
                 timeout=effective_timeout,
                 process_id=f"blender_sandbox_{execution_id}",
+                env={
+                    "PATH": "/usr/bin:/bin",
+                    "HOME": str(workspace),
+                    "LANG": "C.UTF-8",
+                },
             )
 
             return {
