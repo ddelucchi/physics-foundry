@@ -1,4 +1,4 @@
-"""Dependency-light subprocess execution with explicit timeout semantics."""
+"""Dependency-light subprocess execution with bounded output and timeout semantics."""
 
 from __future__ import annotations
 
@@ -15,8 +15,14 @@ class ProcessTimeoutError(TimeoutError):
     """Raised when a child process exceeds its declared timeout."""
 
 
+class ProcessOutputLimitError(RuntimeError):
+    """Raised when a child exceeds the configured stdout/stderr byte limit."""
+
+
 class ProcessRunner:
-    """Run child processes without pulling observability packages into safety code."""
+    """Run child processes with process-group termination and bounded capture."""
+
+    DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 
     async def run_with_timeout(
         self,
@@ -26,16 +32,25 @@ class ProcessRunner:
         cwd: Optional[Path] = None,
         env: Optional[Dict[str, str]] = None,
         process_id: Optional[str] = None,
+        max_output_bytes: Optional[int] = None,
     ) -> subprocess.CompletedProcess:
-        """Run one command and terminate its process group on timeout.
+        """Run one command with bounded stdout/stderr and terminate on failure.
 
-        ``heartbeat_interval`` and ``process_id`` are accepted for compatibility
-        with existing call sites. They do not imply telemetry collection.
+        The byte cap is applied independently to stdout and stderr. Exceeding
+        either limit terminates the whole child process group so a noisy child
+        cannot turn pipe capture into an unbounded-memory denial of service.
+
+        heartbeat_interval and process_id are retained for compatibility with
+        existing call sites and do not imply telemetry collection.
         """
 
         del heartbeat_interval
         identifier = process_id or f"proc_{int(time.time() * 1_000_000)}"
-        start_new_session = os.name == "posix"
+        limit = self.DEFAULT_MAX_OUTPUT_BYTES if max_output_bytes is None else int(max_output_bytes)
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        if limit <= 0:
+            raise ValueError("max_output_bytes must be positive")
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -43,18 +58,70 @@ class ProcessRunner:
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
-            start_new_session=start_new_session,
+            start_new_session=(os.name == "posix"),
         )
 
+        stdout_task = asyncio.create_task(
+            self._read_bounded(process.stdout, limit, "stdout", identifier)
+        )
+        stderr_task = asyncio.create_task(
+            self._read_bounded(process.stderr, limit, "stderr", identifier)
+        )
+        wait_task = asyncio.create_task(process.wait())
+        tasks = (stdout_task, stderr_task, wait_task)
+
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            stdout, stderr, _ = await asyncio.wait_for(
+                asyncio.gather(*tasks),
+                timeout=timeout,
+            )
         except asyncio.TimeoutError as exc:
             await self._terminate(process)
+            await self._cancel_tasks(tasks)
             raise ProcessTimeoutError(
                 f"Process {identifier} timed out after {timeout}s"
             ) from exc
+        except ProcessOutputLimitError:
+            await self._terminate(process)
+            await self._cancel_tasks(tasks)
+            raise
+        except BaseException:
+            await self._terminate(process)
+            await self._cancel_tasks(tasks)
+            raise
 
         return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+
+    @staticmethod
+    async def _read_bounded(
+        stream: Optional[asyncio.StreamReader],
+        limit: int,
+        stream_name: str,
+        identifier: str,
+    ) -> bytes:
+        if stream is None:
+            return b""
+
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = await stream.read(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > limit:
+                raise ProcessOutputLimitError(
+                    f"Process {identifier} exceeded {limit} bytes on {stream_name}"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    @staticmethod
+    async def _cancel_tasks(tasks) -> None:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         """Terminate the child and, on POSIX, its dedicated process group."""
@@ -87,8 +154,6 @@ class ProcessRunner:
         try:
             await asyncio.wait_for(process.wait(), timeout=2.0)
         except asyncio.TimeoutError:
-            # The caller already receives a timeout error; do not convert cleanup
-            # difficulty into a false successful execution result.
             return
 
 
