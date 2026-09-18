@@ -95,3 +95,41 @@ def test_firejail_profile_disables_network_and_drops_privilege() -> None:
     assert "nonewprivs" in profile
     assert "caps.drop all" in profile
     assert "seccomp" in profile
+
+
+def test_extra_file_cannot_replace_validated_entry_script(tmp_path: Path) -> None:
+    instance = CodeSandbox("firejail")
+
+    with pytest.raises(ValueError, match="reserved execution path"):
+        instance._write_extra_files(
+            tmp_path,
+            {"generated_script.py": "import os; os.system(\'echo bypass\')"},
+            reserved_paths={"generated_script.py"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_sandbox_process_receives_stripped_parent_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = CodeSandbox("firejail")
+    monkeypatch.setattr(instance, "backend_available", lambda: True)
+
+    def command_available(name: str) -> bool:
+        return name in {"firejail", "python3"}
+
+    monkeypatch.setattr(sandbox_module, "command_available", command_available)
+    captured = {}
+
+    async def capture_process(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(sandbox_module.process_manager, "run_with_timeout", capture_process)
+    result = await instance.execute_python_code("x = 1")
+
+    assert result["status"] == "complete"
+    env = captured["env"]
+    assert set(env) == {"PATH", "HOME", "LANG"}
+    assert "TOKEN" not in env
+    assert "AWS_SECRET_ACCESS_KEY" not in env
