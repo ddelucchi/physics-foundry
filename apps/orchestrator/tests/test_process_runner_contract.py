@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from orchestrator.core.processes import ProcessRunner, ProcessTimeoutError
+from orchestrator.core.processes import ProcessOutputLimitError, ProcessRunner, ProcessTimeoutError
 
 
 @pytest.mark.asyncio
@@ -39,3 +39,28 @@ async def test_process_runner_times_out_instead_of_returning_success() -> None:
             [sys.executable, "-c", "import time; time.sleep(5)"],
             timeout=0.05,
         )
+
+
+@pytest.mark.asyncio
+async def test_process_runner_rejects_excessive_stdout() -> None:
+    runner = ProcessRunner()
+
+    with pytest.raises(ProcessOutputLimitError, match="stdout"):
+        await runner.run_with_timeout(
+            [sys.executable, "-c", "print('x' * 20000)"],
+            timeout=2.0,
+            max_output_bytes=1024,
+        )
+
+
+@pytest.mark.asyncio
+async def test_process_runner_accepts_explicit_small_output_cap() -> None:
+    runner = ProcessRunner()
+    result = await runner.run_with_timeout(
+        [sys.executable, "-c", "print('bounded-output')"],
+        timeout=2.0,
+        max_output_bytes=4096,
+    )
+
+    assert result.returncode == 0
+    assert b"bounded-output" in result.stdout
