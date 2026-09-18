@@ -1,0 +1,171 @@
+# Physics Foundry - Development & Operations Commands
+# Requires `just` command runner: https://github.com/casey/just
+
+# Default target
+default:
+  @just --list
+
+# System setup and checks
+setup:
+  @echo "🚀 Setting up Physics Foundry development environment..."
+  ./scripts/check_system.sh
+  cd apps/gui && npm install
+  cd apps/orchestrator && python -m pip install -e .
+
+check:
+  @echo "🔍 Running system checks..."
+  ./scripts/check_system.sh
+
+install-llm:
+  @echo "🦙 Installing llama.cpp with CUDA support..."
+  ./scripts/install_llama_server.sh
+
+# Development commands
+dev-gui:
+  @echo "🎨 Starting GUI development server..."
+  cd apps/gui && npm run dev
+
+dev-api:
+  @echo "🔧 Starting orchestrator API server..."
+  cd apps/orchestrator && python -m uvicorn orchestrator.main:app --reload --host 0.0.0.0 --port 8000
+
+dev-all:
+  @echo "🚀 Starting all development servers..."
+  just dev-api &
+  just dev-gui &
+  wait
+
+# Build commands
+build-gui:
+  @echo "🏗️ Building GUI application..."
+  cd apps/gui && npm run build
+
+build-api:
+  @echo "🏗️ Building orchestrator application..."
+  cd apps/orchestrator && python -m pip install -e .
+
+build: build-gui build-api
+
+# Pipeline operations
+plan TOPIC DURATION="60" LEVEL="intermediate":
+  @echo "📋 Planning physics video: {{TOPIC}}"
+  curl -X POST "http://localhost:8000/api/pipeline/create" \
+    -H "Content-Type: application/json" \
+    -d '{"topic": "{{TOPIC}}", "duration": {{DURATION}}, "level": "{{LEVEL}}"}'
+
+preview PROJECT_ID:
+  @echo "👀 Starting preview render for project {{PROJECT_ID}}"
+  curl -X POST "http://localhost:8000/api/pipeline/{{PROJECT_ID}}/start?mode=preview"
+
+render PROJECT_ID:
+  @echo "🎬 Starting final render for project {{PROJECT_ID}}"
+  curl -X POST "http://localhost:8000/api/pipeline/{{PROJECT_ID}}/start?mode=final"
+
+status PROJECT_ID:
+  @echo "📊 Checking status of project {{PROJECT_ID}}"
+  curl -s "http://localhost:8000/api/pipeline/{{PROJECT_ID}}/status" | jq
+
+# Quality assurance
+qc SEQUENCE_PATH:
+  @echo "🔍 Running quality checks on {{SEQUENCE_PATH}}"
+  curl -X POST "http://localhost:8000/api/qa/analyze" \
+    -H "Content-Type: application/json" \
+    -d '{"sequence_path": "{{SEQUENCE_PATH}}", "analysis_type": "comprehensive"}'
+
+align AUDIO_PATH TRANSCRIPT_PATH:
+  @echo "🎵 Aligning audio {{AUDIO_PATH}} with transcript {{TRANSCRIPT_PATH}}"
+  curl -X POST "http://localhost:8000/api/audio/align" \
+    -H "Content-Type: application/json" \
+    -d '{"audio_path": "{{AUDIO_PATH}}", "transcript_path": "{{TRANSCRIPT_PATH}}"}'
+
+# Final assembly
+final PROJECT_ID:
+  @echo "🎯 Assembling final video for project {{PROJECT_ID}}"
+  curl -X POST "http://localhost:8000/api/pipeline/{{PROJECT_ID}}/assemble"
+
+# Testing
+test:
+  @echo "🧪 Running all tests..."
+  cd apps/orchestrator && python -m pytest tests/
+  cd apps/gui && npm run test
+
+test-unit:
+  @echo "🧪 Running unit tests..."
+  cd apps/orchestrator && python -m pytest tests/unit/
+
+test-e2e:
+  @echo "🧪 Running end-to-end tests..."
+  cd apps/orchestrator && python -m pytest tests/e2e/
+
+# Linting and formatting
+lint:
+  @echo "🔍 Running linters..."
+  cd apps/orchestrator && python -m ruff check . && python -m mypy .
+  cd apps/gui && npm run lint
+
+format:
+  @echo "🎨 Formatting code..."
+  cd apps/orchestrator && python -m black . && python -m ruff --fix .
+  cd apps/gui && npm run format
+
+# Monitoring
+logs:
+  @echo "📋 Showing application logs..."
+  tail -f apps/orchestrator/logs/app.log
+
+metrics:
+  @echo "📊 Opening metrics dashboard..."
+  open http://localhost:9090
+
+traces:
+  @echo "🔍 Opening tracing dashboard..."
+  open http://localhost:16686
+
+# Cleanup
+clean:
+  @echo "🧹 Cleaning build artifacts..."
+  rm -rf apps/gui/dist/
+  rm -rf apps/gui/node_modules/.vite/
+  cd apps/orchestrator && find . -name "*.pyc" -delete && find . -name "__pycache__" -delete
+
+reset:
+  @echo "🔄 Resetting development environment..."
+  just clean
+  rm -rf apps/gui/node_modules/
+  cd apps/orchestrator && pip uninstall -y physics-foundry-orchestrator
+
+# Production deployment (when ready)
+deploy-staging:
+  @echo "🚀 Deploying to staging environment..."
+  # Add staging deployment commands here
+
+deploy-prod:
+  @echo "🚀 Deploying to production environment..."
+  # Add production deployment commands here
+
+# Documentation
+docs:
+  @echo "📚 Generating documentation..."
+  cd docs && mdbook build
+
+docs-serve:
+  @echo "📚 Serving documentation locally..."
+  cd docs && mdbook serve
+
+# Examples and demos
+demo-simple:
+  @echo "🎬 Running simple physics demo..."
+  just plan "Newton's Laws of Motion" 120 beginner
+
+demo-complex:
+  @echo "🎬 Running complex physics demo..."
+  just plan "Quantum Entanglement Visualization" 300 advanced
+
+# Health checks
+health:
+  @echo "❤️ Checking service health..."
+  curl -s http://localhost:8000/health | jq
+
+system-info:
+  @echo "ℹ️ System information..."
+  curl -s http://localhost:8000/api/system/status | jq

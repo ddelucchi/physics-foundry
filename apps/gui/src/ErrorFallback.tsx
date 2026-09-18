@@ -1,40 +1,32 @@
-import { Alert, AlertTitle, AlertDescription } from "./components/ui/alert";
-import { Button } from "./components/ui/button";
+import { FallbackProps } from 'react-error-boundary'
+import { AlertTriangleIcon, RefreshCwIcon } from 'lucide-react'
+import { Alert, AlertDescription, AlertTitle } from './components/ui/alert'
+import { Button } from './components/ui/button'
 
-import { AlertTriangleIcon, RefreshCwIcon } from "lucide-react";
-
-export const ErrorFallback = ({ error, resetErrorBoundary }) => {
-  // When encountering an error in the development mode, rethrow it and don't display the boundary.
-  // The parent UI will take care of showing a more helpful dialog.
-  if (import.meta.env.DEV) throw error;
-
+export const ErrorFallback = ({ error, resetErrorBoundary }: FallbackProps) => {
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md">
         <Alert variant="destructive" className="mb-6">
           <AlertTriangleIcon />
-          <AlertTitle>This spark has encountered a runtime error</AlertTitle>
+          <AlertTitle>Physics Foundry encountered a runtime error</AlertTitle>
           <AlertDescription>
-            Something unexpected happened while running the application. The error details are shown below. Contact the spark author and let them know about this issue.
+            The interface stopped before it could safely continue. No success state is inferred from this failure.
           </AlertDescription>
         </Alert>
-        
-        <div className="bg-card border rounded-lg p-4 mb-6">
-          <h3 className="font-semibold text-sm text-muted-foreground mb-2">Error Details:</h3>
-          <pre className="text-xs text-destructive bg-muted/50 p-3 rounded border overflow-auto max-h-32">
+
+        <div className="mb-6 rounded-lg border bg-card p-4">
+          <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Error details</h3>
+          <pre className="max-h-40 overflow-auto rounded border bg-muted/50 p-3 text-xs text-destructive">
             {error.message}
           </pre>
         </div>
-        
-        <Button 
-          onClick={resetErrorBoundary} 
-          className="w-full"
-          variant="outline"
-        >
-          <RefreshCwIcon />
-          Try Again
+
+        <Button onClick={resetErrorBoundary} className="w-full gap-2" variant="outline">
+          <RefreshCwIcon size={16} />
+          Reset interface
         </Button>
       </div>
     </div>
-  );
+  )
 }

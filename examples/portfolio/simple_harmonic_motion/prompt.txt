@@ -1,0 +1,1 @@
+Create a 20-second educational animation introducing one-dimensional simple harmonic motion. Show a mass on a spring, the equilibrium position, displacement x(t), and the relation a = -omega^2 x. Keep the scene to one coordinate axis and one oscillator. Do not introduce damping or driving.

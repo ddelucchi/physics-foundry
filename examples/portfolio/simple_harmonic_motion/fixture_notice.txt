@@ -1,0 +1,1 @@
+FIXTURE ONLY. This directory contains deterministic test inputs/expected structures. It is not a claim of verified LLM generation, rendering, or measured quality.

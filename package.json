@@ -7,11 +7,18 @@
     "apps/gui"
   ],
   "scripts": {
-    "dev:gui": "npm --workspace @physics-foundry/gui run dev",
-    "build": "npm --workspace @physics-foundry/gui run build",
-    "test": "npm --workspace @physics-foundry/gui run test",
-    "lint": "npm --workspace @physics-foundry/gui run lint",
-    "format:check": "npm --workspace @physics-foundry/gui run format:check"
+    "dev": "npm run dev:gui",
+    "dev:gui": "npm run dev --workspace=@physics-foundry/gui",
+    "dev:api": "cd apps/orchestrator && python -m uvicorn orchestrator.main:app --reload --port 8000",
+    "build": "npm run build:gui",
+    "build:gui": "npm run build --workspace=@physics-foundry/gui",
+    "test": "npm run test:gui && npm run test:contract",
+    "test:gui": "npm run test --workspace=@physics-foundry/gui",
+    "test:contract": "cd apps/orchestrator && python -m pytest -q tests/test_portfolio_contract.py tests/test_sandbox_runtime_contract.py",
+    "lint": "npm run lint --workspace=@physics-foundry/gui",
+    "format": "npm run format --workspace=@physics-foundry/gui",
+    "format:check": "npm run format:check --workspace=@physics-foundry/gui",
+    "check": "npm run test && npm run build"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

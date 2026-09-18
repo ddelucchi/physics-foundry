@@ -1,0 +1,23 @@
+{
+  "mode": "fixture",
+  "topic": "simple harmonic motion",
+  "duration_seconds": 20,
+  "learning_objectives": [
+    "identify equilibrium and displacement",
+    "connect acceleration to displacement through a = -omega^2 x"
+  ],
+  "scenes": [
+    {
+      "id": "shm-01",
+      "engine": "manim",
+      "duration_seconds": 8,
+      "purpose": "show mass-spring geometry, equilibrium, and displacement x"
+    },
+    {
+      "id": "shm-02",
+      "engine": "manim",
+      "duration_seconds": 12,
+      "purpose": "animate restoring acceleration and display a = -omega^2 x"
+    }
+  ]
+}

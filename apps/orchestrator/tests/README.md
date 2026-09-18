@@ -1,87 +1,27 @@
-# Physics Foundry Orchestrator Tests
+# Orchestrator tests
 
-This directory contains comprehensive tests for the Physics Foundry orchestrator backend.
+Tests are intentionally separated by evidence level.
 
-## Test Structure
+## Dependency-light portfolio contract
 
-```
-tests/
-├── __init__.py
-├── test_error_handling.py    # Error handling and recovery tests
-├── test_pipeline.py          # Pipeline orchestration tests
-├── test_media_processing.py  # Media pipeline tests
-├── test_quality_analysis.py  # Quality assurance tests
-├── unit/                     # Unit tests
-├── integration/              # Integration tests
-└── e2e/                      # End-to-end tests
-```
+`test_portfolio_contract.py` checks semantics that can run in ordinary hosted CI without GPU/render/model dependencies:
 
-## Running Tests
+- fixture mode is explicit opt-in;
+- capability status is boolean and inspectable;
+- deterministic fixture plans are labeled as fixtures;
+- Pydantic list/dict defaults are isolated between model instances;
+- fixture/unsupported terminal states are distinct from real completion/error.
+
+Run from the repository root:
 
 ```bash
-# Run all tests
-pytest tests/
-
-# Run with coverage
-pytest --cov=orchestrator --cov-report=html tests/
-
-# Run specific test file
-pytest tests/test_error_handling.py -v
-
-# Run only unit tests
-pytest tests/unit/ -v
-
-# Run with performance profiling
-pytest tests/ --profile
-
-# Run parallel tests
-pytest tests/ -n auto
+PYTHONPATH=apps/orchestrator pytest -q apps/orchestrator/tests/test_portfolio_contract.py
 ```
 
-## Test Categories
+## Other tests
 
-### Unit Tests
-- Test individual functions and classes in isolation
-- Mock external dependencies
-- Fast execution (< 1 second per test)
+`test_error_handling.py` covers the error/recovery subsystem and may require the broader orchestrator environment.
 
-### Integration Tests  
-- Test interaction between components
-- Use real databases/services in test environment
-- Medium execution time (< 10 seconds per test)
+## Evidence boundary
 
-### End-to-End Tests
-- Test complete workflows from API to output
-- Use production-like environment
-- Longer execution time (< 60 seconds per test)
-
-## Test Configuration
-
-Tests use the following configuration:
-
-- **Test Database**: SQLite in-memory database
-- **Test Storage**: Temporary filesystem
-- **Mock Services**: LLM, rendering engines, external APIs
-- **Fixtures**: Common test data and setup
-
-## Coverage Goals
-
-- **Unit Tests**: 90%+ coverage
-- **Integration Tests**: 80%+ coverage  
-- **Critical Paths**: 100% coverage
-
-## Continuous Testing
-
-Tests are automatically run on:
-- Every commit (via GitHub Actions)
-- Pull requests
-- Scheduled daily runs
-- Release builds
-
-## Performance Testing
-
-Performance tests validate:
-- Response time < 100ms for API endpoints
-- Memory usage < 500MB under normal load
-- Throughput > 10 requests/second
-- Error recovery time < 5 seconds
+Passing dependency-light tests establishes orchestration/model semantics only. It does **not** establish local-LLM availability, sandbox hardening, Manim/Blender/Taichi execution, or a real prompt-to-video artifact chain.

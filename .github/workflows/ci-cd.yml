@@ -1,47 +1,96 @@
-name: CI
+name: Portfolio Verification
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  gui:
-    name: GUI test and build
+  gui-contract:
+    name: GUI contract
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: package-lock.json
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Unit tests
-        run: npm test
-      - name: Production build
-        run: npm run build
 
-  orchestrator:
-    name: Orchestrator syntax and unit tests
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Typecheck reachable GUI
+        run: npm run typecheck --workspace=@physics-foundry/gui
+
+      - name: Run GUI smoke tests
+        run: npm run test --workspace=@physics-foundry/gui
+
+      - name: Build GUI
+        run: npm run build --workspace=@physics-foundry/gui
+
+      - name: Explain GUI scope
+        if: always()
+        run: |
+          echo "This job verifies the reachable React/TypeScript GUI graph, smoke tests, and Vite build."
+          echo "It does not establish renderer, GPU, local-model, sandbox-runtime, or end-to-end video capability."
+
+  orchestrator-contract:
+    name: Orchestrator contract
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/orchestrator
+    timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install package shell and test tools
+
+      - name: Install dependency-light test requirements
         run: |
           python -m pip install --upgrade pip
-          pip install -e . --no-deps
-          pip install pytest pytest-asyncio pytest-cov
-      - name: Compile Python sources
-        run: python -m compileall -q orchestrator
-      - name: Unit tests
-        run: pytest -q
+          python -m pip install \
+            "pydantic>=2.5,<3" \
+            "pytest>=7.4,<9" \
+            "pytest-asyncio>=0.21,<1"
+
+      - name: Compile contract and integration-boundary modules
+        run: |
+          python -m py_compile \
+            apps/orchestrator/orchestrator/core/dsl_models.py \
+            apps/orchestrator/orchestrator/core/capabilities.py \
+            apps/orchestrator/orchestrator/core/fixtures.py \
+            apps/orchestrator/orchestrator/core/processes.py \
+            apps/orchestrator/orchestrator/core/quality_gates.py \
+            apps/orchestrator/orchestrator/core/sandbox_policy.py \
+            apps/orchestrator/orchestrator/core/sandbox.py \
+            apps/orchestrator/orchestrator/main.py
+
+      - name: Run dependency-light contracts
+        env:
+          PYTHONPATH: apps/orchestrator
+        run: |
+          pytest -q \
+            apps/orchestrator/tests/test_portfolio_contract.py \
+            apps/orchestrator/tests/test_process_runner_contract.py \
+            apps/orchestrator/tests/test_quality_schema_contract.py \
+            apps/orchestrator/tests/test_sandbox_runtime_contract.py
+
+      - name: Explain orchestrator scope
+        if: always()
+        run: |
+          echo "This job verifies dependency-light orchestration, subprocess timeout semantics, QA schema semantics, and sandbox failure semantics."
+          echo "It syntax-checks integration-boundary modules without claiming their external dependencies are available."
+          echo "It does not claim GPU, LLM, Manim, Blender, Taichi, FFmpeg/libvmaf, firejail runtime isolation, or end-to-end rendering capability."

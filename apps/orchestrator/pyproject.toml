@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "physics-foundry-orchestrator"
-version = "0.2.0"
-description = "Research-prototype FastAPI orchestrator for AI-assisted physics visualization workflows"
+version = "0.3.0"
+description = "Prototype FastAPI orchestrator for local-first physics-media workflows"
 authors = ["Daxx Delucchi"]
 
 [tool.poetry.dependencies]
@@ -16,7 +16,7 @@ pydantic = "^2.5.0"
 # Media & Timeline Processing
 opentimelineio = "^0.16.0"
 opencv-python = "^4.8.0"
-pillow = "^10.0.0" 
+pillow = "^10.0.0"
 numpy = "^1.24.0"
 openimageio = "^3.0.6"
 
@@ -50,27 +50,19 @@ ffmpeg-python = "^0.2.0"
 python-multipart = "^0.0.6"
 
 [tool.poetry.group.dev.dependencies]
-# Testing & Validation
 pytest = "^7.4.0"
 pytest-asyncio = "^0.21.0"
 hypothesis = "^6.88.0"
 pytest-cov = "^4.1.0"
-
-# Code Quality
 black = "^23.0.0"
 ruff = "^0.1.0"
 mypy = "^1.7.0"
 pre-commit = "^3.5.0"
-
-# Type Stubs
 types-requests = "^2.31.0"
 types-pillow = "^10.1.0"
 
 [tool.poetry.group.optional.dependencies]
-# GPU Acceleration (optional)
 pynvml = "^11.5.0"
-
-# Advanced Media Processing (optional)
 PyOpenColorIO = "^2.3.0"
 
 [build-system]
@@ -80,18 +72,18 @@ build-backend = "poetry.core.masonry.api"
 [tool.ruff]
 line-length = 88
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
 ]
 ignore = [
-    "E501", # line too long, handled by black
-    "B008", # do not perform function calls in argument defaults
-    "C901", # too complex
+    "E501",
+    "B008",
+    "C901",
 ]
 
 [tool.ruff.per-file-ignores]

@@ -1,5 +1,5 @@
-# Physics Foundry - Pre-commit Configuration
-# Ensures code quality and prevents bad commits
+# Physics Foundry pre-commit checks
+# Keep these hooks aligned with commands that work from the repository root.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -25,7 +25,7 @@ repos:
     hooks:
       - id: mypy
         files: ^apps/orchestrator/
-        additional_dependencies: 
+        additional_dependencies:
           - fastapi
           - pydantic
           - types-requests
@@ -42,15 +42,15 @@ repos:
   - repo: local
     hooks:
       - id: poetry-check
-        name: poetry-check
-        entry: poetry check
+        name: orchestrator-poetry-check
+        entry: bash -c 'cd apps/orchestrator && poetry check'
         language: system
-        files: pyproject\.toml$
+        files: ^apps/orchestrator/pyproject\.toml$
         pass_filenames: false
-        
-      - id: test-build
-        name: test-build
-        entry: npm run build --workspace=apps/gui
+
+      - id: gui-build
+        name: gui-build
+        entry: npm run build:gui
         language: system
         files: ^apps/gui/
         pass_filenames: false

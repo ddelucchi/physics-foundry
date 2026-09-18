@@ -1,238 +1,157 @@
-# Physics Foundry - Product Requirements Document
+# Physics Foundry Product Vision
 
-> **Document status:** target-state architecture and product requirements. The repository [README](../README.md) is authoritative for current implementation status. Checkboxes and aspirational KPIs below are design targets, not independently verified performance claims.
+This document describes the **target product direction** for Physics Foundry. It is not an implementation-status document and must not be used as evidence that every component below is operational.
 
-## Overview
+For current evidence, use [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and [`CLAIMS.md`](CLAIMS.md).
 
-Physics Foundry is a **modular, error-coded, multi-model, fully-local** target architecture for physics-video generation research. It leverages **multiple LLMs via OpenAI-compatible local servers**, live token streaming, **headless Blender (Cycles CUDA/OptiX)**, **Manim (OpenGL/Cairo)**, **Taichi (CUDA/GPU autoselect)**, **OpenTimelineIO** as timeline authority, **OCIO** color management, **FFmpeg** with hardware acceleration, **Whisper.cpp** and **Montreal Forced Aligner** for precise audio synchronization, **Piper TTS** for offline narration, and **Prometheus + OpenTelemetry** for comprehensive observability.
+## Product thesis
 
-## Architecture Principles
+Physics Foundry explores a local-first scientific-media workflow in which a bounded physics request can be transformed into a structured scene plan, generated renderer code, observable execution jobs, reviewable media artifacts, and quality-analysis results.
 
-### Local-First AI
-- **OpenAI-compatible LLM server** with streaming token support (llama.cpp)
-- **Multiple model roles**: planner, critic, aligner, code generator
-- **GGUF quantized models** with GPU layer offloading
-- **Complete privacy** - no external API dependencies
+The long-term product should make every transformation inspectable. A user should be able to see not only the final video, but also the plan, generated source, execution environment, renderer logs, artifacts, quality measurements, and any remediation decisions.
 
-### Multi-Engine Rendering
-- **Intelligent engine selection** based on content type and complexity
-- **Manim**: Mathematical equations, graphs, 2D animations
-- **Taichi**: Fluid dynamics, particle systems, field visualizations  
-- **Blender**: 3D models, realistic physics, cinematic sequences
-- **Graceful degradation**: OptiX→CUDA→CPU fallbacks
+## Design principles
 
-### Timeline-Centric Workflow
-- **OpenTimelineIO** as single source of timing truth
-- **Word-level markers** from audio alignment
-- **Frame-first rendering** for crash resumability
-- **Content-addressable storage** with SHA-256 checksums
+### 1. Evidence before automation
 
-### Error-Coded Reliability
-- **Structured error codes** (SUBSYS-CATEGORY-NNN format)
-- **Auto-remediation rules** built into each error type
-- **Fallback strategies** for common failure modes
-- **Health monitoring** with nvidia-smi integration
+The system should never report successful production output merely because a simulated workflow completed. Real execution, fixtures, demos, unsupported states, and errors must remain distinguishable.
 
-## Core Components
+### 2. Local-first, capability-aware operation
 
-### GUI Application (`/apps/gui/`)
-- **Tauri + React + Vite + TypeScript** desktop application
-- **Real-time WebSocket** connection to orchestrator
-- **Consolidated RenderPreview** component with multiple modes:
-  - `basic`: Simple playback and analysis
-  - `enhanced`: Advanced controls and batch processing
-  - `frameQA`: Frame-by-frame quality analysis
-  - `comprehensive`: Full pipeline monitoring
-- **Live token streaming** from LLM during script generation
-- **Audio alignment workspace** with waveform visualization
-- **System monitor** with GPU utilization tracking
+The intended deployment model favors locally controlled models, renderers, media tools, and artifacts. The application should detect what is actually available on the current machine and degrade by reporting unavailable capabilities rather than inventing success.
 
-### Orchestrator Backend (`/apps/orchestrator/`)
-- **FastAPI + WebSockets** for real-time pipeline updates
-- **OpenTimelineIO integration** for timeline management
-- **Multi-worker coordination** (Blender/Manim/Taichi)
-- **Quality assurance** with SSIM/optical flow analysis
-- **Audio alignment** with Whisper.cpp and MFA
-- **Prometheus metrics** and **OpenTelemetry traces**
-- **Error registry** with auto-fix suggestions
+### 3. Typed orchestration
 
-### Shared Packages (`/packages/`)
-- **JSON Schema** definitions for DSL validation
-- **Generated TypeScript/Python types** from schemas
-- **Plugin architecture** for extensible rendering engines
+Planning, rendering, quality analysis, and artifact management should communicate through explicit schemas and status models rather than ad-hoc state.
 
-## Configuration Management
+### 4. Renderer independence
 
-### Runtime Configuration (`/config/runtime.config.json`)
-```json
-{
-  "llm": {
-    "endpoint": "http://127.0.0.1:8080/v1",
-    "models": [
-      {"name": "gpt-neox-20b-q4", "n_gpu_layers": 28},
-      {"name": "mistral-7b-instruct-q5", "n_gpu_layers": 35}
-    ],
-    "roles": {
-      "planner": "gpt-neox-20b-q4",
-      "script_critic": "mistral-7b-instruct-q5"
-    }
-  },
-  "render": {
-    "device": "OPTIX",
-    "fallback_device": "CUDA",
-    "preview_samples": 8,
-    "final_samples": 128
-  },
-  "color": {
-    "ocio_config": "config/ocio/config.ocio",
-    "display": "Rec.709",
-    "eotf": "BT.1886"
-  }
-}
+Manim, Taichi, Blender, or future engines should sit behind separable interfaces. A renderer integration is considered complete only after its real artifact path is reproducible.
+
+### 5. Generated code is untrusted
+
+Static source policy is defense-in-depth only. Real generated-code execution must occur through a verified isolation boundary, with no silent direct-host fallback.
+
+### 6. Human-reviewable artifacts
+
+Plans, generated source, commands, logs, media outputs, checksums, quality measurements, and revisions should be retained whenever practical so a run can be audited and reproduced.
+
+## Target workflow
+
+```text
+physics request
+    ↓
+structured scene plan
+    ↓
+script / visual beat representation
+    ↓
+renderer selection
+    ↓
+generated source
+    ↓
+validation + isolated execution
+    ↓
+rendered media artifact
+    ↓
+measured quality checks
+    ↓
+human review / bounded remediation
+    ↓
+assembly + export
 ```
 
-### OCIO Color Management (`/config/ocio/`)
-- **AgX and Filmic** view transforms
-- **Rec.709/BT.1886** display compliance
-- **ACEScg working space** for consistent color
-- **Automatic color tagging** enforcement
+The current portfolio milestone intentionally implements and verifies this workflow one narrow vertical slice at a time rather than claiming full autonomous coverage.
 
-## Quality Assurance System
+## Product surfaces
 
-### Automated Analysis
-- **SSIM comparison** against reference frames
-- **Optical flow stability** detection
-- **Text legibility** assessment
-- **Color accuracy** validation
-- **Compression artifact** detection
+### GUI
 
-### Real-Time Monitoring  
-- **Frame-by-frame analysis** during rendering
-- **Quality gates** with automatic retry logic
-- **Visual overlay** of detected issues
-- **Automatic remediation suggestions**
+Target responsibilities:
 
-## Audio Pipeline
+- project creation and inspection;
+- pipeline/job status;
+- generated-source review;
+- renderer logs and artifacts;
+- QA visualization;
+- audio/timing review;
+- capability and system-state visibility;
+- explicit provenance labels for demo, fixture, and live data.
 
-### Voice Synchronization
-- **Whisper.cpp CUDA** for fast transcription
-- **Montreal Forced Aligner** for word-level timing
-- **OTIO marker injection** for precise sync
-- **EBU R128 loudness** normalization with FFmpeg
+Current implementation status varies by panel. Pipeline and system monitoring are backend-driven; other presentation surfaces remain partly demo/prototype behavior.
 
-### Scratch Audio Generation
-- **Piper TTS** for offline narration during development
-- **Real-time alignment** feedback for script timing
-- **Voice replacement** workflow for final production
+### Orchestrator
 
-## Development Workflow
+Target responsibilities:
 
-### Setup Commands
-```bash
-# Install dependencies
-just setup
+- validate incoming requests;
+- construct typed plans;
+- coordinate renderer jobs;
+- expose status and logs over REST/WebSocket paths;
+- report capability availability;
+- enforce generated-code execution boundaries;
+- persist artifacts and metadata;
+- coordinate quality checks and bounded retries.
 
-# Check system requirements  
-just check
+### Renderer integrations
 
-# Install LLM server with CUDA
-just install-llm
-```
+Potential engine roles:
 
-### Development Servers
-```bash
-# Start all services
-just dev-all
+- **Manim:** equations, derivations, graphs, geometric constructions, and 2D scientific animation;
+- **Taichi:** particle/field simulation and GPU-oriented numerical visualization;
+- **Blender:** 3D scientific scenes, camera work, and physically richer geometry.
 
-# Individual services
-just dev-gui    # React/Vite frontend
-just dev-api    # FastAPI backend
-```
+These roles are architectural targets. The presence of an interface or worker does not establish end-to-end renderer readiness.
 
-### Pipeline Operations
-```bash
-# Plan physics video
-just plan "Quantum Mechanics" 180 intermediate
+### Quality analysis
 
-# Start preview render
-just preview project-123
+Target checks may include image similarity, motion stability, text legibility, clipping, artifact detection, timing consistency, and other inspectable measurements.
 
-# Run quality checks
-just qc /path/to/sequence
+A quality threshold is useful only when it is computed from a real produced artifact. Deterministic synthetic QA remains appropriate for UI development but must be labeled as demo data.
 
-# Final assembly
-just final project-123
-```
+### Audio and timing
 
-## Error Handling
+The product vision includes narration ingestion, transcription/alignment, beat timing, and eventual timeline assembly. Those paths remain experimental until a reproducible real artifact demonstrates them.
 
-### Structured Error Codes
-- **LLM-JSON-001**: Invalid DSL JSON → field repair with streaming continuation
-- **BLD-OPTIX-302**: OptiX OOM → CUDA fallback with reduced samples
-- **MNM-OGL-101**: OpenGL init failed → Cairo renderer fallback
-- **ENC-NVENC-801**: NVENC unavailable → libx264 automatic fallback
+## Reliability model
 
-### Auto-Remediation
-Each error includes:
-- **Failing command** and stderr excerpt
-- **Auto-fix script** when applicable
-- **GUI toggle** to promote fix to permanent setting
-- **Documentation link** for manual resolution
+Terminal states should preserve meaning:
 
-## Extensibility
+- `complete`: real supported operation completed;
+- `fixture_complete`: deterministic orchestration fixture completed;
+- `unsupported`: required real capability unavailable or unwired;
+- `error`: supported operation attempted and failed.
 
-### Plugin Architecture
-- **Rendering engine plugins** in `/packages/plugins/`
-- **Drop-in GGUF model** support via llama.cpp server
-- **OCIO config profiles** for different color workflows
-- **Prometheus/OTel sink** configuration for monitoring
+Retries should be bounded and observable. Fallbacks may change implementation strategy, but they must not lower the evidence standard for success.
 
-### Model Zoo Support
-- **Any GGUF model** compatible with llama.cpp server
-- **Role-based model assignment** (planner vs critic)
-- **Context length** and **GPU layer** optimization
-- **Streaming token support** for real-time feedback
+## Security model
 
-## Deployment & Operations
+Generated renderer code is considered untrusted. The target runtime should minimize inherited environment access, filesystem visibility, network access, capabilities, and child-process escape surface.
 
-### Health Monitoring
-- **nvidia-smi integration** for GPU utilization
-- **WebSocket heartbeats** for connection health
-- **Pipeline DAG visualization** with retry states
-- **OpenTelemetry distributed tracing**
+The current project does **not** claim hardened hostile multi-tenant isolation. Runtime sandbox verification is tracked separately.
 
-### Scalability
-- **Multiple concurrent pipelines** with resource allocation
-- **Worker pool management** with automatic scaling
-- **Content-addressable cache** with configurable limits
-- **Frame-first architecture** for trivial parallelization
+## Portfolio acceptance criterion
 
-## Success Metrics
+The first reference production path is deliberately narrow:
 
-### Technical KPIs
-- **Pipeline completion rate** > 95%
-- **Average processing time** < 2x content duration  
-- **Quality gate pass rate** > 90%
-- **GPU utilization** > 80% during rendering
+1. accept one bounded physics prompt;
+2. produce a schema-valid scene plan;
+3. persist generated Manim source;
+4. execute through the supported isolation path;
+5. produce a non-empty MP4;
+6. compute at least one real QA measurement from that MP4;
+7. persist enough source, configuration, logs, and metadata to reproduce the run.
 
-### User Experience
-- **Real-time feedback** during all pipeline stages
-- **One-click remediation** for common issues
-- **Reproducible results** with seed-based determinism
-- **Professional-grade output** meeting broadcast standards
+Only after that path is retained and repeatable should the portfolio expand its public claims to broader renderer autonomy.
 
-## Implementation Status
+## Non-goals for current public claims
 
-- [x] Monorepo structure with apps/packages organization
-- [x] Consolidated RenderPreview component with multiple modes
-- [x] FastAPI orchestrator with WebSocket real-time updates
-- [x] Runtime configuration with LLM/render/color settings
-- [x] OCIO color management configuration
-- [x] System check and installation scripts
-- [x] Development workflow with Just commands
-- [ ] Complete worker implementations (Blender/Manim/Taichi)
-- [ ] Audio alignment pipeline with Whisper.cpp/MFA
-- [ ] Quality analysis engine with SSIM/optical flow
-- [ ] Error registry with auto-remediation
-- [ ] Telemetry integration (Prometheus/OpenTelemetry)
-- [ ] End-to-end pipeline testing
+Physics Foundry is not presently advertised as:
+
+- a commercial-ready autonomous video studio;
+- a verified production renderer farm;
+- a hardened multi-tenant code-execution service;
+- a guarantee of physics correctness;
+- a guarantee of pedagogical or visual quality;
+- proof that every optional renderer/model dependency works on every machine.
+
+Those may be future ambitions. They are not current evidence.

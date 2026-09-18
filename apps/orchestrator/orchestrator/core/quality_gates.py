@@ -1,504 +1,478 @@
-"""
-Quality gates and analysis system
-Implements SSIM, PSNR, VMAF analysis with automated quality control
+"""Measured frame statistics and reference-based video quality gates.
+
+The module deliberately separates direct measurements from interpretation.
+Single-frame statistics are never labeled as OCR/text legibility, optical-flow
+stability, temporal motion quality, or calibrated color accuracy.
 """
 
-import asyncio
+from __future__ import annotations
+
+import json
 import logging
-import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
-import json
-import tempfile
 
 import cv2
 import numpy as np
 from skimage import metrics as sk_metrics
-import OpenImageIO as oiio
 
-from .dsl_models import QualityMetrics, QualityIssue, FrameAnalysis
-from .observability import RetryableOperation, process_manager, operation_duration_seconds
+from .dsl_models import FrameAnalysis, QualityIssue, QualityMetrics
+from .observability import RetryableOperation, operation_duration_seconds, process_manager
 
 logger = logging.getLogger(__name__)
 
 
 class QualityAnalyzer:
-    """Frame-by-frame quality analysis with SSIM, PSNR, and VMAF"""
-    
-    def __init__(self):
+    """Compute bounded image statistics and an explicitly heuristic gate score."""
+
+    def __init__(self) -> None:
         self.quality_thresholds = {
-            'ssim_minimum': 0.85,
-            'psnr_minimum': 30.0,
-            'vmaf_minimum': 70.0,
-            'text_legibility_minimum': 0.80,
-            'motion_stability_minimum': 0.75
+            "reference_ssim_minimum": 0.85,
+            "sharpness_variance_minimum": 25.0,
+            "clipping_fraction_maximum": 0.05,
+            "block_boundary_ratio_maximum": 2.5,
         }
-    
-    def set_quality_thresholds(self, thresholds: Dict[str, float]):
-        """Update quality thresholds"""
-        self.quality_thresholds.update(thresholds)
-        logger.info(f"Updated quality thresholds: {self.quality_thresholds}")
-    
+
+    def set_quality_thresholds(self, thresholds: Dict[str, float]) -> None:
+        """Update only threshold keys understood by this analyzer."""
+
+        for key in self.quality_thresholds:
+            if key in thresholds:
+                self.quality_thresholds[key] = float(thresholds[key])
+
     def analyze_frame(
         self,
         frame_path: Path,
         reference_path: Optional[Path] = None,
         frame_index: int = 0,
-        timestamp: float = 0.0
+        timestamp: float = 0.0,
     ) -> FrameAnalysis:
-        """Comprehensive frame quality analysis"""
-        
-        with operation_duration_seconds.labels(operation='frame_analysis').time():
+        """Measure one frame and optionally compare it with a reference frame."""
+
+        with operation_duration_seconds.labels(operation="frame_analysis").time():
             try:
-                # Load frame
                 frame = self._load_frame(frame_path)
                 if frame is None:
                     raise ValueError(f"Could not load frame: {frame_path}")
-                
-                # Initialize metrics
-                metrics = QualityMetrics(
-                    ssim_score=1.0,
-                    optical_flow_stability=1.0,
-                    text_legibility=0.0,
-                    color_accuracy=1.0,
-                    motion_artifacts=0,
-                    compression_artifacts=0
-                )
-                
-                issues = []
-                
-                # SSIM analysis if reference provided
-                if reference_path and reference_path.exists():
+
+                issues: List[QualityIssue] = []
+                reference_ssim: Optional[float] = None
+
+                if reference_path is not None:
                     reference = self._load_frame(reference_path)
-                    if reference is not None:
-                        metrics.ssim_score = self._calculate_ssim(frame, reference)
-                        
-                        if metrics.ssim_score < self.quality_thresholds['ssim_minimum']:
-                            issues.append(QualityIssue(
-                                type='structural_similarity',
-                                severity='high' if metrics.ssim_score < 0.7 else 'medium',
-                                description=f'SSIM score {metrics.ssim_score:.3f} below threshold',
-                                suggestion='Check for blurriness, artifacts, or content changes',
-                                auto_fixable=False
-                            ))
-                
-                # Text legibility analysis
-                metrics.text_legibility = self._analyze_text_legibility(frame)
-                if metrics.text_legibility < self.quality_thresholds['text_legibility_minimum']:
-                    issues.append(QualityIssue(
-                        type='text_legibility',
-                        severity='high',
-                        description=f'Text legibility {metrics.text_legibility:.3f} below threshold',
-                        suggestion='Increase font size, improve contrast, or check text positioning',
-                        auto_fixable=True
-                    ))
-                
-                # Motion artifact detection
-                artifacts = self._detect_motion_artifacts(frame)
-                metrics.motion_artifacts = len(artifacts)
-                
-                for artifact in artifacts:
-                    issues.append(QualityIssue(
-                        type='motion_artifact',
-                        severity='medium',
-                        description='Motion blur or temporal inconsistency detected',
-                        location=artifact,
-                        suggestion='Check frame timing or motion vectors',
-                        auto_fixable=False
-                    ))
-                
-                # Compression artifact detection
-                compression_score = self._detect_compression_artifacts(frame)
-                metrics.compression_artifacts = int(compression_score * 100)
-                
-                if compression_score > 0.1:
-                    issues.append(QualityIssue(
-                        type='compression_artifacts',
-                        severity='medium' if compression_score < 0.2 else 'high',
-                        description=f'Compression artifacts detected (score: {compression_score:.3f})',
-                        suggestion='Reduce compression ratio or use lossless intermediate format',
-                        auto_fixable=True
-                    ))
-                
-                # Color accuracy check
-                metrics.color_accuracy = self._check_color_accuracy(frame)
-                if metrics.color_accuracy < 0.9:
-                    issues.append(QualityIssue(
-                        type='color_accuracy',
-                        severity='medium',
-                        description='Color accuracy below expected range',
-                        suggestion='Verify color management pipeline and OCIO configuration',
-                        auto_fixable=False
-                    ))
-                
-                # Calculate overall score
-                overall_score = (
-                    metrics.ssim_score * 0.3 +
-                    metrics.text_legibility * 0.25 +
-                    metrics.optical_flow_stability * 0.2 +
-                    metrics.color_accuracy * 0.15 +
-                    max(0, 1 - metrics.motion_artifacts * 0.1) * 0.1
+                    if reference is None:
+                        issues.append(
+                            QualityIssue(
+                                type="reference_unreadable",
+                                severity="critical",
+                                description=f"Could not load reference frame: {reference_path}",
+                                suggestion="Provide a readable reference image with matching dimensions.",
+                            )
+                        )
+                    elif reference.shape != frame.shape:
+                        issues.append(
+                            QualityIssue(
+                                type="reference_shape_mismatch",
+                                severity="critical",
+                                description=(
+                                    f"Reference shape {reference.shape} does not match frame shape {frame.shape}; "
+                                    "SSIM was not computed."
+                                ),
+                                suggestion="Compare frames with identical dimensions and channel layout.",
+                            )
+                        )
+                    else:
+                        reference_ssim = self._calculate_ssim(frame, reference)
+                        threshold = self.quality_thresholds["reference_ssim_minimum"]
+                        if reference_ssim < threshold:
+                            issues.append(
+                                QualityIssue(
+                                    type="reference_ssim",
+                                    severity="high" if reference_ssim < 0.70 else "medium",
+                                    description=(
+                                        f"Reference SSIM {reference_ssim:.3f} is below the configured "
+                                        f"threshold {threshold:.3f}."
+                                    ),
+                                    suggestion="Inspect the produced frame against the intended reference.",
+                                )
+                            )
+
+                gray = self._to_gray(frame)
+                sharpness_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                edge_density = self._edge_density(gray)
+                clipping_fraction = self._clipping_fraction(frame)
+                block_boundary_ratio = self._block_boundary_ratio(gray)
+
+                sharpness_min = self.quality_thresholds["sharpness_variance_minimum"]
+                if sharpness_variance < sharpness_min:
+                    issues.append(
+                        QualityIssue(
+                            type="low_spatial_detail",
+                            severity="medium",
+                            description=(
+                                f"Laplacian variance {sharpness_variance:.2f} is below the configured "
+                                f"sharpness heuristic {sharpness_min:.2f}."
+                            ),
+                            suggestion="Inspect the frame for blur or intentionally low-detail content.",
+                        )
+                    )
+
+                clipping_max = self.quality_thresholds["clipping_fraction_maximum"]
+                if clipping_fraction > clipping_max:
+                    issues.append(
+                        QualityIssue(
+                            type="pixel_clipping",
+                            severity="medium",
+                            description=(
+                                f"Clipped-channel fraction {clipping_fraction:.3%} exceeds the configured "
+                                f"threshold {clipping_max:.3%}."
+                            ),
+                            suggestion="Inspect whether extreme black/white values are intentional.",
+                        )
+                    )
+
+                block_max = self.quality_thresholds["block_boundary_ratio_maximum"]
+                if block_boundary_ratio > block_max:
+                    issues.append(
+                        QualityIssue(
+                            type="block_boundary_discontinuity",
+                            severity="medium",
+                            description=(
+                                f"8x8 boundary discontinuity ratio {block_boundary_ratio:.3f} exceeds "
+                                f"the configured heuristic {block_max:.3f}."
+                            ),
+                            suggestion="Inspect the frame for block-like encoding artifacts.",
+                        )
+                    )
+
+                metrics = QualityMetrics(
+                    reference_ssim=reference_ssim,
+                    sharpness_variance=sharpness_variance,
+                    edge_density=edge_density,
+                    clipping_fraction=clipping_fraction,
+                    block_boundary_ratio=block_boundary_ratio,
                 )
-                
+
                 return FrameAnalysis(
                     frame_index=frame_index,
                     timestamp=timestamp,
                     metrics=metrics,
                     issues=issues,
-                    overall_score=min(1.0, max(0.0, overall_score)),
-                    analysis_duration=0.0  # Will be filled by timing decorator
+                    heuristic_score=self._heuristic_score(metrics),
+                    analysis_duration=0.0,
                 )
-                
-            except Exception as e:
-                logger.error(f"Frame analysis failed for {frame_path}: {e}")
-                # Return minimal analysis with error
+            except Exception as exc:
+                logger.exception("Frame analysis failed for %s", frame_path)
                 return FrameAnalysis(
                     frame_index=frame_index,
                     timestamp=timestamp,
                     metrics=QualityMetrics(
-                        ssim_score=0.0,
-                        optical_flow_stability=0.0,
-                        text_legibility=0.0,
-                        color_accuracy=0.0,
-                        motion_artifacts=999,
-                        compression_artifacts=999
+                        reference_ssim=None,
+                        sharpness_variance=0.0,
+                        edge_density=0.0,
+                        clipping_fraction=0.0,
+                        block_boundary_ratio=0.0,
                     ),
-                    issues=[QualityIssue(
-                        type='analysis_error',
-                        severity='critical',
-                        description=f'Quality analysis failed: {str(e)}',
-                        suggestion='Check frame format and accessibility',
-                        auto_fixable=False
-                    )],
-                    overall_score=0.0,
-                    analysis_duration=0.0
+                    issues=[
+                        QualityIssue(
+                            type="analysis_error",
+                            severity="critical",
+                            description=f"Quality analysis failed: {exc}",
+                            suggestion="Check frame format and accessibility.",
+                        )
+                    ],
+                    heuristic_score=0.0,
+                    analysis_duration=0.0,
                 )
-    
-    def _load_frame(self, path: Path) -> Optional[np.ndarray]:
-        """Load frame using OpenImageIO for broad format support"""
-        try:
-            inp = oiio.ImageInput.open(str(path))
-            if not inp:
-                return None
-            
-            spec = inp.spec()
-            pixels = inp.read_image(oiio.FLOAT)
-            inp.close()
-            
-            # Convert to OpenCV format (BGR, uint8)
-            if pixels.dtype == np.float32:
-                pixels = (pixels * 255).astype(np.uint8)
-            
-            # Handle different channel layouts
-            if spec.nchannels == 4:  # RGBA -> BGR
-                pixels = cv2.cvtColor(pixels, cv2.COLOR_RGBA2BGR)
-            elif spec.nchannels == 3:  # RGB -> BGR  
-                pixels = cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
-            
-            return pixels
-            
-        except Exception as e:
-            logger.debug(f"OIIO failed, trying OpenCV: {e}")
-            try:
-                return cv2.imread(str(path))
-            except Exception as e2:
-                logger.error(f"Could not load {path}: {e2}")
-                return None
-    
-    def _calculate_ssim(self, img1: np.ndarray, img2: np.ndarray) -> float:
-        """Calculate SSIM between two frames"""
-        try:
-            # Ensure same dimensions
-            if img1.shape != img2.shape:
-                h, w = min(img1.shape[0], img2.shape[0]), min(img1.shape[1], img2.shape[1])
-                img1 = img1[:h, :w]
-                img2 = img2[:h, :w]
-            
-            # Convert to grayscale if needed
-            if len(img1.shape) == 3:
-                img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-                img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-            
-            return sk_metrics.structural_similarity(img1, img2)
-            
-        except Exception as e:
-            logger.error(f"SSIM calculation failed: {e}")
+
+    @staticmethod
+    def _load_frame(path: Path) -> Optional[np.ndarray]:
+        """Load a frame through OpenCV without silently fabricating fallback data."""
+
+        if not path.exists() or not path.is_file():
+            return None
+        frame = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        return frame if frame is not None and frame.size > 0 else None
+
+    @staticmethod
+    def _to_gray(frame: np.ndarray) -> np.ndarray:
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+
+    @classmethod
+    def _calculate_ssim(cls, first: np.ndarray, second: np.ndarray) -> float:
+        """Calculate reference SSIM only for equal-shaped frames."""
+
+        if first.shape != second.shape:
+            raise ValueError("SSIM requires equal-shaped frames")
+        first_gray = cls._to_gray(first)
+        second_gray = cls._to_gray(second)
+        return float(
+            sk_metrics.structural_similarity(
+                first_gray,
+                second_gray,
+                data_range=255,
+            )
+        )
+
+    @staticmethod
+    def _edge_density(gray: np.ndarray) -> float:
+        edges = cv2.Canny(gray, 100, 200)
+        return float(np.count_nonzero(edges) / edges.size) if edges.size else 0.0
+
+    @staticmethod
+    def _clipping_fraction(frame: np.ndarray) -> float:
+        if not frame.size:
             return 0.0
-    
-    def _analyze_text_legibility(self, frame: np.ndarray) -> float:
-        """Analyze text legibility using edge detection and contrast"""
-        try:
-            # Convert to grayscale
-            if len(frame.shape) == 3:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            else:
-                gray = frame
-            
-            # Apply Gaussian blur to reduce noise
-            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-            
-            # Calculate local contrast using Laplacian
-            laplacian = cv2.Laplacian(blurred, cv2.CV_64F)
-            contrast_score = laplacian.var()
-            
-            # Normalize to 0-1 range (empirically determined)
-            normalized_score = min(1.0, contrast_score / 500.0)
-            
-            return normalized_score
-            
-        except Exception as e:
-            logger.error(f"Text legibility analysis failed: {e}")
+        clipped = (frame <= 1) | (frame >= 254)
+        return float(np.count_nonzero(clipped) / frame.size)
+
+    @staticmethod
+    def _block_boundary_ratio(gray: np.ndarray) -> float:
+        """Compare 8x8-boundary discontinuities with non-boundary differences.
+
+        This is a blockiness heuristic, not a codec diagnosis. A value near 1
+        means 8x8 boundaries are not unusually discontinuous relative to other
+        adjacent-pixel differences.
+        """
+
+        if gray.shape[0] < 9 or gray.shape[1] < 9:
             return 0.0
-    
-    def _detect_motion_artifacts(self, frame: np.ndarray) -> List[Dict[str, int]]:
-        """Detect motion artifacts using gradient analysis"""
-        artifacts = []
-        
-        try:
-            # Convert to grayscale
-            if len(frame.shape) == 3:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            else:
-                gray = frame
-            
-            # Calculate gradients
-            grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-            grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-            
-            # Find high gradient regions (potential motion blur)
-            gradient_mag = np.sqrt(grad_x**2 + grad_y**2)
-            threshold = np.percentile(gradient_mag, 95)
-            
-            # Find contours of high-gradient regions
-            high_grad = (gradient_mag > threshold).astype(np.uint8) * 255
-            contours, _ = cv2.findContours(high_grad, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            for contour in contours:
-                if cv2.contourArea(contour) > 100:  # Filter small artifacts
-                    x, y, w, h = cv2.boundingRect(contour)
-                    artifacts.append({'x': x, 'y': y, 'width': w, 'height': h})
-            
-            return artifacts[:10]  # Limit to top 10 artifacts
-            
-        except Exception as e:
-            logger.error(f"Motion artifact detection failed: {e}")
-            return []
-    
-    def _detect_compression_artifacts(self, frame: np.ndarray) -> float:
-        """Detect compression artifacts using DCT analysis"""
-        try:
-            # Convert to grayscale
-            if len(frame.shape) == 3:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            else:
-                gray = frame
-            
-            # Apply DCT to detect blocking artifacts
-            # Resize to multiple of 8 for DCT
-            h, w = gray.shape
-            h_new, w_new = (h // 8) * 8, (w // 8) * 8
-            if h_new > 0 and w_new > 0:
-                gray_resized = cv2.resize(gray, (w_new, h_new))
-                
-                # Calculate variance in DCT coefficients
-                dct = cv2.dct(gray_resized.astype(np.float32))
-                high_freq_energy = np.sum(np.abs(dct[4:, 4:]))
-                total_energy = np.sum(np.abs(dct))
-                
-                if total_energy > 0:
-                    artifact_score = 1.0 - (high_freq_energy / total_energy)
-                    return max(0.0, min(1.0, artifact_score))
-            
+
+        values = gray.astype(np.float32)
+        vertical = np.abs(np.diff(values, axis=1))
+        horizontal = np.abs(np.diff(values, axis=0))
+
+        v_mask = np.zeros(vertical.shape[1], dtype=bool)
+        h_mask = np.zeros(horizontal.shape[0], dtype=bool)
+        v_mask[np.arange(7, vertical.shape[1], 8)] = True
+        h_mask[np.arange(7, horizontal.shape[0], 8)] = True
+
+        boundary_parts = []
+        interior_parts = []
+        if np.any(v_mask):
+            boundary_parts.append(vertical[:, v_mask].ravel())
+            interior_parts.append(vertical[:, ~v_mask].ravel())
+        if np.any(h_mask):
+            boundary_parts.append(horizontal[h_mask, :].ravel())
+            interior_parts.append(horizontal[~h_mask, :].ravel())
+
+        if not boundary_parts or not interior_parts:
             return 0.0
-            
-        except Exception as e:
-            logger.error(f"Compression artifact detection failed: {e}")
+
+        boundary = np.concatenate(boundary_parts)
+        interior = np.concatenate(interior_parts)
+        boundary_mean = float(np.mean(boundary)) if boundary.size else 0.0
+        interior_mean = float(np.mean(interior)) if interior.size else 0.0
+        if boundary_mean == 0.0 and interior_mean == 0.0:
             return 0.0
-    
-    def _check_color_accuracy(self, frame: np.ndarray) -> float:
-        """Check color accuracy using histogram analysis"""
-        try:
-            # Calculate color histograms
-            if len(frame.shape) == 3:
-                # Calculate histogram for each channel
-                hist_b = cv2.calcHist([frame], [0], None, [256], [0, 256])
-                hist_g = cv2.calcHist([frame], [1], None, [256], [0, 256])
-                hist_r = cv2.calcHist([frame], [2], None, [256], [0, 256])
-                
-                # Check for proper distribution (avoid clipping)
-                total_pixels = frame.shape[0] * frame.shape[1]
-                
-                # Check for clipping (too many pixels at extremes)
-                clipping_threshold = total_pixels * 0.01  # 1% threshold
-                
-                b_clipped = hist_b[0] + hist_b[255] > clipping_threshold
-                g_clipped = hist_g[0] + hist_g[255] > clipping_threshold  
-                r_clipped = hist_r[0] + hist_r[255] > clipping_threshold
-                
-                if any([b_clipped, g_clipped, r_clipped]):
-                    return 0.7  # Penalize for clipping
-                
-                # Check for reasonable spread
-                b_spread = np.std(np.where(hist_b.flatten())[0])
-                g_spread = np.std(np.where(hist_g.flatten())[0])
-                r_spread = np.std(np.where(hist_r.flatten())[0])
-                
-                avg_spread = (b_spread + g_spread + r_spread) / 3.0
-                spread_score = min(1.0, avg_spread / 64.0)  # Normalize
-                
-                return spread_score
-            
-            return 1.0  # Grayscale - assume good
-            
-        except Exception as e:
-            logger.error(f"Color accuracy check failed: {e}")
-            return 0.5
+        return boundary_mean / max(interior_mean, 1e-6)
+
+    def _heuristic_score(self, metrics: QualityMetrics) -> float:
+        """Combine declared heuristics without presenting them as a calibrated quality metric."""
+
+        sharpness_component = metrics.sharpness_variance / (metrics.sharpness_variance + 100.0)
+
+        clipping_limit = max(self.quality_thresholds["clipping_fraction_maximum"], 1e-6)
+        clipping_component = max(0.0, 1.0 - metrics.clipping_fraction / clipping_limit)
+
+        block_limit = max(self.quality_thresholds["block_boundary_ratio_maximum"], 1.000001)
+        if metrics.block_boundary_ratio <= 1.0:
+            block_component = 1.0
+        else:
+            block_component = max(
+                0.0,
+                1.0 - (metrics.block_boundary_ratio - 1.0) / (block_limit - 1.0),
+            )
+
+        if metrics.reference_ssim is None:
+            score = (sharpness_component + clipping_component + block_component) / 3.0
+        else:
+            score = (
+                0.50 * metrics.reference_ssim
+                + 0.20 * sharpness_component
+                + 0.15 * clipping_component
+                + 0.15 * block_component
+            )
+        return float(min(1.0, max(0.0, score)))
 
 
-class VMafAnalyzer:
-    """VMAF perceptual quality analysis"""
-    
+class VmafAnalyzer:
+    """Reference-based VMAF adapter executed through FFmpeg/libvmaf."""
+
     @RetryableOperation.with_backoff(max_attempts=2)
     async def calculate_vmaf(
         self,
         reference_video: Path,
         distorted_video: Path,
-        model_path: Optional[str] = None
+        model_path: Optional[str] = None,
     ) -> Dict[str, float]:
-        """Calculate VMAF score between reference and distorted videos"""
-        
+        """Calculate VMAF only when both real input videos are available."""
+
+        if not reference_video.exists() or not distorted_video.exists():
+            return {}
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+            log_path = Path(handle.name)
+
         model_arg = f"model={model_path}" if model_path else "model=version=vmaf_v0.6.1"
-        
         cmd = [
-            'ffmpeg', '-y',
-            '-i', str(distorted_video),
-            '-i', str(reference_video),
-            '-lavfi', f'libvmaf={model_arg}:log_fmt=json:log_path=/tmp/vmaf_output.json',
-            '-f', 'null', '-'
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(distorted_video),
+            "-i",
+            str(reference_video),
+            "-lavfi",
+            f"libvmaf={model_arg}:log_fmt=json:log_path={log_path}",
+            "-f",
+            "null",
+            "-",
         ]
-        
+
         try:
             result = await process_manager.run_with_timeout(
                 cmd,
                 timeout=300.0,
-                process_id=f"vmaf_{distorted_video.stem}"
+                process_id=f"vmaf_{distorted_video.stem}",
             )
-            
-            # Read VMAF results
-            with open('/tmp/vmaf_output.json', 'r') as f:
-                vmaf_data = json.load(f)
-            
-            # Extract scores
-            frames = vmaf_data.get('frames', [])
-            if frames:
-                scores = [frame['metrics']['vmaf'] for frame in frames]
-                return {
-                    'vmaf_mean': np.mean(scores),
-                    'vmaf_min': np.min(scores),
-                    'vmaf_max': np.max(scores),
-                    'vmaf_std': np.std(scores),
-                    'frame_count': len(scores)
-                }
-            
-            return {}
-            
-        except Exception as e:
-            logger.error(f"VMAF calculation failed: {e}")
+            if result.returncode != 0 or not log_path.exists() or log_path.stat().st_size == 0:
+                return {}
+
+            with log_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+
+            scores = [
+                float(frame["metrics"]["vmaf"])
+                for frame in data.get("frames", [])
+                if "vmaf" in frame.get("metrics", {})
+            ]
+            if not scores:
+                return {}
+
+            return {
+                "vmaf_mean": float(np.mean(scores)),
+                "vmaf_min": float(np.min(scores)),
+                "vmaf_max": float(np.max(scores)),
+                "vmaf_std": float(np.std(scores)),
+                "frame_count": float(len(scores)),
+            }
+        except Exception:
+            logger.exception("VMAF calculation failed")
             return {}
         finally:
-            # Cleanup
-            if Path('/tmp/vmaf_output.json').exists():
-                Path('/tmp/vmaf_output.json').unlink()
+            log_path.unlink(missing_ok=True)
 
 
 class QualityGate:
-    """Quality control gate that enforces standards"""
-    
+    """Apply declared heuristics and reference metrics without inventing success."""
+
     def __init__(self, config: Dict[str, float]):
         self.thresholds = config
         self.analyzer = QualityAnalyzer()
         self.analyzer.set_quality_thresholds(config)
-        self.vmaf_analyzer = VMafAnalyzer()
-    
+        self.vmaf_analyzer = VmafAnalyzer()
+
     async def check_frame_sequence(
         self,
         frames: List[Path],
-        reference_frames: Optional[List[Path]] = None
+        reference_frames: Optional[List[Path]] = None,
     ) -> Tuple[bool, List[FrameAnalysis]]:
-        """Check quality of frame sequence"""
-        
-        analyses = []
-        critical_failures = 0
-        
-        for i, frame_path in enumerate(frames):
-            ref_path = reference_frames[i] if reference_frames and i < len(reference_frames) else None
-            
-            analysis = self.analyzer.analyze_frame(
-                frame_path,
-                ref_path,
-                frame_index=i,
-                timestamp=i * (1.0/30.0)  # Assume 30fps
+        """Evaluate frame statistics; an empty sequence never passes."""
+
+        if not frames:
+            return False, []
+
+        analyses: List[FrameAnalysis] = []
+        for index, frame_path in enumerate(frames):
+            reference = (
+                reference_frames[index]
+                if reference_frames is not None and index < len(reference_frames)
+                else None
             )
-            
-            analyses.append(analysis)
-            
-            # Count critical issues
-            critical_issues = [issue for issue in analysis.issues if issue.severity == 'critical']
-            critical_failures += len(critical_issues)
-        
-        # Gate decision
-        overall_scores = [a.overall_score for a in analyses]
-        avg_score = np.mean(overall_scores) if overall_scores else 0.0
-        
-        gate_passed = (
-            critical_failures == 0 and 
-            avg_score >= self.thresholds.get('overall_minimum', 0.75)
+            analyses.append(
+                self.analyzer.analyze_frame(
+                    frame_path,
+                    reference,
+                    frame_index=index,
+                    timestamp=index / 30.0,
+                )
+            )
+
+        critical_failures = sum(
+            1
+            for analysis in analyses
+            for issue in analysis.issues
+            if issue.severity == "critical"
         )
-        
-        return gate_passed, analyses
-    
+        average_heuristic = float(np.mean([analysis.heuristic_score for analysis in analyses]))
+        minimum = self.thresholds.get("heuristic_score_minimum", 0.60)
+        return critical_failures == 0 and average_heuristic >= minimum, analyses
+
     async def check_video_quality(
         self,
         video_path: Path,
-        reference_path: Optional[Path] = None
-    ) -> Dict[str, Union[bool, float, Dict]]:
-        """Comprehensive video quality check"""
-        
-        results = {
-            'gate_passed': False,
-            'overall_score': 0.0,
-            'vmaf_scores': {},
-            'issues': []
+        reference_path: Optional[Path] = None,
+    ) -> Dict[str, Union[None, bool, float, str, Dict[str, float], List[str]]]:
+        """Run reference-based VMAF or explicitly report that evaluation is unavailable."""
+
+        if not video_path.exists():
+            return {
+                "evaluation_status": "error",
+                "gate_passed": False,
+                "vmaf_scores": {},
+                "issues": [f"Video does not exist: {video_path}"],
+                "vmaf_normalized": None,
+            }
+
+        if reference_path is None:
+            return {
+                "evaluation_status": "not_evaluated",
+                "gate_passed": None,
+                "vmaf_scores": {},
+                "issues": ["Reference video required for VMAF evaluation."],
+                "vmaf_normalized": None,
+            }
+
+        if not reference_path.exists():
+            return {
+                "evaluation_status": "error",
+                "gate_passed": False,
+                "vmaf_scores": {},
+                "issues": [f"Reference video does not exist: {reference_path}"],
+                "vmaf_normalized": None,
+            }
+
+        scores = await self.vmaf_analyzer.calculate_vmaf(reference_path, video_path)
+        if not scores:
+            return {
+                "evaluation_status": "error",
+                "gate_passed": False,
+                "vmaf_scores": {},
+                "issues": ["VMAF could not be computed; verify FFmpeg/libvmaf and input compatibility."],
+                "vmaf_normalized": None,
+            }
+
+        mean_score = float(scores["vmaf_mean"])
+        minimum = self.thresholds.get("vmaf_minimum", 70.0)
+        passed = mean_score >= minimum
+        return {
+            "evaluation_status": "evaluated",
+            "gate_passed": passed,
+            "vmaf_scores": scores,
+            "issues": [] if passed else [f"VMAF {mean_score:.1f} is below threshold {minimum:.1f}."],
+            "vmaf_normalized": min(1.0, max(0.0, mean_score / 100.0)),
         }
-        
-        try:
-            # VMAF analysis if reference provided
-            if reference_path:
-                vmaf_scores = await self.vmaf_analyzer.calculate_vmaf(reference_path, video_path)
-                results['vmaf_scores'] = vmaf_scores
-                
-                if vmaf_scores:
-                    vmaf_mean = vmaf_scores.get('vmaf_mean', 0)
-                    if vmaf_mean < self.thresholds.get('vmaf_minimum', 70.0):
-                        results['issues'].append(f"VMAF score {vmaf_mean:.1f} below threshold")
-            
-            # Additional checks can be added here
-            # For now, assume passed if no critical issues
-            results['gate_passed'] = len(results['issues']) == 0
-            results['overall_score'] = vmaf_scores.get('vmaf_mean', 100) / 100.0 if vmaf_scores else 1.0
-            
-        except Exception as e:
-            logger.error(f"Video quality check failed: {e}")
-            results['issues'].append(f"Quality analysis failed: {str(e)}")
-        
-        return results
 
 
-# Global instances
 quality_analyzer = QualityAnalyzer()
-default_quality_gate = QualityGate({
-    'ssim_minimum': 0.85,
-    'vmaf_minimum': 70.0,
-    'overall_minimum': 0.75,
-    'text_legibility_minimum': 0.80
-})
+default_quality_gate = QualityGate(
+    {
+        "reference_ssim_minimum": 0.85,
+        "sharpness_variance_minimum": 25.0,
+        "clipping_fraction_maximum": 0.05,
+        "block_boundary_ratio_maximum": 2.5,
+        "heuristic_score_minimum": 0.60,
+        "vmaf_minimum": 70.0,
+    }
+)

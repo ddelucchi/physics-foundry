@@ -1,28 +1,53 @@
-/**
- * Real-time Pipeline Monitor Component
- * Shows live pipeline execution with streaming updates
- */
-
-import { useState, useEffect, useRef } from 'react'
-import { Button } from '@/components/ui/button'
+import { useEffect, useRef, useState } from 'react'
+import { Activity, AlertCircle, Brain, CheckCircle, Clock, Play, RotateCcw, Video } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Play, RotateCcw, Download, Activity, Brain, Video, CheckCircle, AlertCircle, Clock } from 'lucide-react'
-import { 
-  PhysicsVideoPipeline, 
-  PipelineState, 
-  PipelineArtifact,
-  PhysicsVideoRequest 
-} from '@/lib/pipeline-orchestrator'
+import { PhysicsVideoRequest } from '@/lib/pipeline-orchestrator'
 
-interface PipelineStats {
-  cpuUsage: number
-  gpuUsage: number
-  ramUsage: number
-  vramUsage: number
+type PipelineStatus =
+  | 'idle'
+  | 'planning'
+  | 'scripting'
+  | 'rendering'
+  | 'assembling'
+  | 'complete'
+  | 'fixture_complete'
+  | 'unsupported'
+  | 'error'
+
+interface PipelineLogEntry {
+  timestamp: string
+  level: 'debug' | 'info' | 'warn' | 'error'
+  message: string
+  component: string
+  metadata: Record<string, unknown>
+}
+
+interface PipelineArtifact {
+  id: string
+  type: 'video' | 'audio' | 'image' | 'data' | 'code'
+  path: string
+  size: number
+  checksum: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+interface PipelineState {
+  pipeline_id: string
+  status: PipelineStatus
+  current_step: number
+  total_steps: number
+  progress: number
+  current_operation: string
+  logs: PipelineLogEntry[]
+  artifacts: PipelineArtifact[]
+  created_at?: string
+  updated_at?: string
 }
 
 interface PipelineMonitorProps {
@@ -30,213 +55,259 @@ interface PipelineMonitorProps {
   onComplete: (videoPath: string) => void
 }
 
-const defaultConfig = {
-  llmModel: 'gpt-neox-20b-q4',
-  maxGpuLayers: 28,
-  renderQuality: 'preview' as const,
-  audioSampleRate: 48000,
-  targetFrameRate: 30,
-  outputResolution: { width: 1920, height: 1080 },
-  ocioConfig: 'config/ocio/config.ocio',
-  enableOptiX: true,
-  nvencPreset: 'p7'
+const API_BASE_URL =
+  (import.meta.env.VITE_ORCHESTRATOR_URL as string | undefined)?.replace(/\/$/, '') ||
+  'http://127.0.0.1:8000'
+
+const EMPTY_STATE: PipelineState = {
+  pipeline_id: '',
+  status: 'idle',
+  current_step: 0,
+  total_steps: 1,
+  progress: 0,
+  current_operation: 'No pipeline job started',
+  logs: [],
+  artifacts: [],
+}
+
+const TERMINAL_STATES = new Set<PipelineStatus>([
+  'complete',
+  'fixture_complete',
+  'unsupported',
+  'error',
+])
+
+const mapLevel = (level: PhysicsVideoRequest['level']): 'beginner' | 'intermediate' | 'advanced' => {
+  if (level === 'intro') return 'beginner'
+  if (level === 'expert') return 'advanced'
+  return 'intermediate'
 }
 
 const PipelineMonitor: React.FC<PipelineMonitorProps> = ({ request, onComplete }) => {
-  const [pipeline] = useState(() => new PhysicsVideoPipeline(defaultConfig))
-  const [state, setState] = useState<PipelineState>(pipeline.getState())
+  const [state, setState] = useState<PipelineState>(EMPTY_STATE)
   const [isRunning, setIsRunning] = useState(false)
-  const [artifacts, setArtifacts] = useState<PipelineArtifact[]>([])
-  const [systemStats, setSystemStats] = useState<PipelineStats>({
-    cpuUsage: 0,
-    gpuUsage: 0,
-    ramUsage: 0,
-    vramUsage: 0
-  })
-
+  const [mode, setMode] = useState<string>('unknown')
+  const [transportError, setTransportError] = useState<string | null>(null)
+  const pollGeneration = useRef(0)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const handleStateUpdate = (newState: PipelineState) => {
-      setState(newState)
-      setArtifacts(newState.artifacts)
-      
-      console.log('New pipeline state:', newState)
-    }
-
-    const handleArtifactCreated = (artifact: PipelineArtifact) => {
-      console.log('New artifact:', artifact)
-    }
-
-    pipeline.addEventListener('stateUpdate', handleStateUpdate)
-    pipeline.addEventListener('artifactCreated', handleArtifactCreated)
-
     return () => {
-      pipeline.removeEventListener('stateUpdate', handleStateUpdate)
-      pipeline.removeEventListener('artifactCreated', handleArtifactCreated)
+      pollGeneration.current += 1
     }
-  }, [pipeline])
-
-  useEffect(() => {
-    // Simulate system stats updates
-    const interval = setInterval(() => {
-      setSystemStats({
-        cpuUsage: Math.random() * 100,
-        gpuUsage: Math.random() * 100,
-        ramUsage: 60 + Math.random() * 30,
-        vramUsage: 40 + Math.random() * 40
-      })
-    }, 2000)
-
-    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
-    // Auto-scroll logs to bottom
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [state.logs])
 
+  const pollPipeline = async (pipelineId: string, generation: number) => {
+    while (pollGeneration.current === generation) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/pipeline/${pipelineId}/status`, {
+          headers: { Accept: 'application/json' },
+        })
+
+        if (!response.ok) {
+          throw new Error(`status request returned HTTP ${response.status}`)
+        }
+
+        const nextState = (await response.json()) as PipelineState
+        setState(nextState)
+        setTransportError(null)
+
+        if (TERMINAL_STATES.has(nextState.status)) {
+          setIsRunning(false)
+
+          if (nextState.status === 'complete') {
+            const video = nextState.artifacts.find((artifact) => artifact.type === 'video')
+            if (video?.path) onComplete(video.path)
+          }
+          return
+        }
+      } catch (caught) {
+        setTransportError(caught instanceof Error ? caught.message : 'pipeline status unavailable')
+        setIsRunning(false)
+        return
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 750))
+    }
+  }
+
   const handleStart = async () => {
-    if (!request) return
-    
+    if (!request || isRunning) return
+
+    const generation = pollGeneration.current + 1
+    pollGeneration.current = generation
     setIsRunning(true)
+    setTransportError(null)
+
     try {
-      const result = await pipeline.generateVideo(request)
-      onComplete(result)
-      console.log('Pipeline completed successfully')
-    } catch (error) {
-      console.error('Pipeline failed:', error)
-    } finally {
+      const response = await fetch(`${API_BASE_URL}/api/pipeline/create`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          topic: request.topic,
+          duration: request.duration,
+          level: mapLevel(request.level),
+          style: {
+            color_theme: request.style?.colorTheme ?? 'scientific',
+            font_stack: request.style?.fontStack ?? ['Inter', 'JetBrains Mono'],
+            motion_vocabulary: request.style?.motionVocabulary ?? 'smooth',
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(`pipeline creation returned HTTP ${response.status}: ${detail}`)
+      }
+
+      const created = (await response.json()) as {
+        pipeline_id: string
+        status: string
+        mode: string
+      }
+
+      setMode(created.mode)
+      setState({
+        ...EMPTY_STATE,
+        pipeline_id: created.pipeline_id,
+        status: 'planning',
+        current_operation: 'Pipeline accepted by orchestrator',
+      })
+
+      await pollPipeline(created.pipeline_id, generation)
+    } catch (caught) {
+      setTransportError(caught instanceof Error ? caught.message : 'pipeline creation failed')
       setIsRunning(false)
     }
   }
 
-  const handleStop = () => {
-    setIsRunning(false)
-    // In real implementation, would stop the pipeline
-  }
-
   const handleReset = () => {
-    setState(pipeline.getState())
-    setArtifacts([])
+    pollGeneration.current += 1
+    setIsRunning(false)
+    setMode('unknown')
+    setTransportError(null)
+    setState(EMPTY_STATE)
   }
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'complete':
-        return <CheckCircle className="h-4 w-4 text-green-500" />
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-500" />
-      case 'idle':
-        return <Clock className="h-4 w-4 text-muted-foreground" />
-      default:
-        return <Activity className="h-4 w-4 text-blue-500 animate-pulse" />
+  const getStatusIcon = (status: PipelineStatus) => {
+    if (status === 'complete' || status === 'fixture_complete') {
+      return <CheckCircle className="h-4 w-4" />
     }
+    if (status === 'error' || status === 'unsupported') {
+      return <AlertCircle className="h-4 w-4" />
+    }
+    if (status === 'idle') return <Clock className="h-4 w-4 text-muted-foreground" />
+    return <Activity className="h-4 w-4 animate-pulse" />
   }
 
-  const getStepName = (step: number): string => {
-    const steps = [
-      'Initialize',
-      'Generate Outline',
-      'Create Script',
-      'Plan Animations',
-      'Generate Audio',
-      'Render Scenes',
-      'Quality Check',
-      'Refine Renders',
-      'Voice Alignment',
-      'Final Assembly',
-      'Export'
-    ]
-    return steps[step - 1] || 'Unknown'
+  const statusVariant = () => {
+    if (state.status === 'error') return 'destructive' as const
+    if (state.status === 'fixture_complete' || state.status === 'unsupported') return 'secondary' as const
+    return 'default' as const
   }
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Brain className="h-5 w-5" />
-            Physics Video Pipeline
-            {getStatusIcon(state.status)}
-          </CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle className="flex items-center gap-2">
+              <Brain className="h-5 w-5" />
+              Orchestrator Pipeline
+              {getStatusIcon(state.status)}
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">API: {API_BASE_URL}</Badge>
+              <Badge variant={mode === 'fixture' ? 'secondary' : 'outline'}>mode: {mode}</Badge>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Button 
-              onClick={handleStart} 
-              disabled={isRunning || !request}
-              className="flex items-center gap-2"
-            >
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => void handleStart()} disabled={isRunning || !request} className="gap-2">
               <Play className="h-4 w-4" />
-              Start Pipeline
+              Start via API
             </Button>
-            <Button 
-              onClick={handleStop} 
-              disabled={!isRunning}
-              variant="outline"
-              className="flex items-center gap-2"
-            >
-              <Stop className="h-4 w-4" />
-              Stop
-            </Button>
-            <Button 
-              onClick={handleReset} 
-              variant="outline"
-              className="flex items-center gap-2"
-            >
+            <Button onClick={handleReset} variant="outline" className="gap-2">
               <RotateCcw className="h-4 w-4" />
-              Reset
+              Reset view
             </Button>
           </div>
+
+          {!request ? (
+            <p className="text-sm text-muted-foreground">
+              Create a request before starting an orchestrator pipeline.
+            </p>
+          ) : null}
+
+          {transportError ? (
+            <div className="rounded-md border border-border bg-muted/50 p-3 text-sm">
+              <div className="font-medium">Orchestrator request failed</div>
+              <div className="mt-1 text-muted-foreground">{transportError}</div>
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
-              <span>Progress: Step {state.currentStep} of {state.totalSteps}</span>
+              <span>Step {state.current_step} of {state.total_steps}</span>
               <span>{Math.round(state.progress)}%</span>
             </div>
             <Progress value={state.progress} className="h-2" />
-            <p className="text-sm text-muted-foreground">
-              {state.currentOperation || getStepName(state.currentStep)}
-            </p>
+            <p className="text-sm text-muted-foreground">{state.current_operation}</p>
           </div>
 
-          <Badge variant={state.status === 'error' ? 'destructive' : 'default'}>
-            {state.status}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={statusVariant()}>{state.status}</Badge>
+            {state.pipeline_id ? <Badge variant="outline">{state.pipeline_id}</Badge> : null}
+          </div>
+
+          {state.status === 'fixture_complete' ? (
+            <p className="text-sm text-muted-foreground">
+              Fixture completion verifies orchestration semantics only. It does not represent a rendered video and does not trigger the completion callback.
+            </p>
+          ) : null}
+
+          {state.status === 'unsupported' ? (
+            <p className="text-sm text-muted-foreground">
+              The backend explicitly reports that a required real capability is not yet wired or available. No simulated success is substituted.
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 
       <Tabs defaultValue="logs" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
-          <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
-          <TabsTrigger value="system">System</TabsTrigger>
+          <TabsTrigger value="logs">Backend logs</TabsTrigger>
+          <TabsTrigger value="artifacts">Backend artifacts</TabsTrigger>
+          <TabsTrigger value="execution">Execution semantics</TabsTrigger>
         </TabsList>
 
         <TabsContent value="logs">
           <Card>
             <CardHeader>
-              <CardTitle>Pipeline Logs</CardTitle>
+              <CardTitle>Pipeline logs</CardTitle>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-64">
                 <div className="space-y-1 font-mono text-sm">
                   {state.logs.map((log, index) => (
-                    <div key={index} className={`
-                      ${log.level === 'error' ? 'text-red-500' : ''}
-                      ${log.level === 'warn' ? 'text-yellow-500' : ''}
-                      ${log.level === 'info' ? 'text-blue-500' : ''}
-                    `}>
+                    <div key={`${log.timestamp}-${index}`}>
                       <span className="text-muted-foreground">
-                        [{new Date(log.timestamp).toLocaleTimeString()}]
-                      </span>
-                      {' '}
+                        [{new Date(log.timestamp).toLocaleTimeString()}] [{log.component}] [{log.level}]
+                      </span>{' '}
                       {log.message}
                     </div>
                   ))}
+                  {state.logs.length === 0 ? (
+                    <p className="font-sans text-sm text-muted-foreground">No backend log entries yet.</p>
+                  ) : null}
                   <div ref={logsEndRef} />
                 </div>
               </ScrollArea>
@@ -247,72 +318,43 @@ const PipelineMonitor: React.FC<PipelineMonitorProps> = ({ request, onComplete }
         <TabsContent value="artifacts">
           <Card>
             <CardHeader>
-              <CardTitle>Generated Artifacts ({artifacts.length})</CardTitle>
+              <CardTitle>Persisted artifacts ({state.artifacts.length})</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {artifacts.map((artifact) => (
-                  <div key={artifact.id} className="flex items-center justify-between p-2 border rounded">
-                    <div className="flex items-center gap-2">
-                      <Video className="h-4 w-4" />
-                      <div>
-                        <div className="font-medium">{artifact.id}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {artifact.type} • {(artifact.size / 1024 / 1024).toFixed(1)}MB
-                        </div>
+                {state.artifacts.map((artifact) => (
+                  <div key={artifact.id} className="flex items-start gap-3 rounded border p-3">
+                    <Video className="mt-0.5 h-4 w-4" />
+                    <div className="min-w-0">
+                      <div className="font-medium">{artifact.id}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {artifact.type} · {artifact.size.toLocaleString()} bytes
+                      </div>
+                      <div className="break-all font-mono text-xs text-muted-foreground">{artifact.path}</div>
+                      <div className="break-all font-mono text-[11px] text-muted-foreground">
+                        sha/checksum: {artifact.checksum}
                       </div>
                     </div>
-                    <Button size="sm" variant="outline">
-                      <Download className="h-4 w-4" />
-                    </Button>
                   </div>
                 ))}
-                {artifacts.length === 0 && (
-                  <p className="text-muted-foreground text-center py-4">
-                    No artifacts generated yet
-                  </p>
-                )}
+                {state.artifacts.length === 0 ? (
+                  <p className="py-4 text-center text-muted-foreground">No backend artifacts reported.</p>
+                ) : null}
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="system">
+        <TabsContent value="execution">
           <Card>
             <CardHeader>
-              <CardTitle>System Monitor</CardTitle>
+              <CardTitle>Execution semantics</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span>CPU Usage</span>
-                    <span>{Math.round(systemStats.cpuUsage)}%</span>
-                  </div>
-                  <Progress value={systemStats.cpuUsage} className="h-2" />
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span>GPU Usage</span>
-                    <span>{Math.round(systemStats.gpuUsage)}%</span>
-                  </div>
-                  <Progress value={systemStats.gpuUsage} className="h-2" />
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span>RAM Usage</span>
-                    <span>{Math.round(systemStats.ramUsage)}%</span>
-                  </div>
-                  <Progress value={systemStats.ramUsage} className="h-2" />
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span>VRAM Usage</span>
-                    <span>{Math.round(systemStats.vramUsage)}%</span>
-                  </div>
-                  <Progress value={systemStats.vramUsage} className="h-2" />
-                </div>
-              </div>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p><code>complete</code> is reserved for a real completed backend capability.</p>
+              <p><code>fixture_complete</code> means deterministic orchestration testing only.</p>
+              <p><code>unsupported</code> means the backend refused to invent success for an unavailable path.</p>
+              <p>This component does not generate CPU/GPU telemetry or client-side render progress.</p>
             </CardContent>
           </Card>
         </TabsContent>

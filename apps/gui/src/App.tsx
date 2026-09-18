@@ -4,9 +4,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Plus } from 'lucide-react'
 import ProjectDashboard from '@/components/ProjectDashboard'
-import ProjectCreation from '@/components/ProjectCreation'
+import ProjectCreation, { ProjectDraft } from '@/components/ProjectCreation'
 import SystemMonitor from '@/components/SystemMonitor'
-import PipelineSettings from '@/components/PipelineSettings'
 import RenderPreview from '@/components/RenderPreview'
 import QAAnalysisDashboard from '@/components/QAAnalysisDashboard'
 import PipelineMonitor from '@/components/PipelineMonitor'
@@ -15,23 +14,26 @@ import AudioAlignmentWorkspace from '@/components/AudioAlignmentWorkspace'
 import { Project } from '@/lib/types'
 import { RenderSequence } from '@/lib/qa-types'
 import { PhysicsVideoRequest } from '@/lib/pipeline-orchestrator'
-import { 
-  mockRenderSequence, 
-  mockQAMetrics, 
-  generateMockFrameAnalyses,
-  mockAnalyzeFrame,
-  mockUploadSequence 
-} from '@/lib/mockQAData'
+import { DATA_PROVENANCE } from '@/lib/dataProvenance'
+import {
+  demoAnalyzeFrame,
+  demoQAMetrics,
+  demoRenderSequence,
+  demoUploadSequence,
+  generateDemoFrameAnalyses,
+} from '@/lib/demoQAData'
 
 function App() {
-  const [projects, setProjects] = useKV<Project[]>("physics-video-projects", [])
-  const [activeTab, setActiveTab] = useState("dashboard")
+  const [projects, setProjects] = useKV<Project[]>('physics-video-projects', [])
+  const [activeTab, setActiveTab] = useState('dashboard')
   const [showCreateProject, setShowCreateProject] = useState(false)
-  const [currentSequence, setCurrentSequence] = useKV<RenderSequence | null>("current-qa-sequence", mockRenderSequence)
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [currentSequence, setCurrentSequence] = useKV<RenderSequence | null>(
+    'current-qa-sequence',
+    demoRenderSequence,
+  )
   const [currentRequest, setCurrentRequest] = useState<PhysicsVideoRequest | null>(null)
 
-  const createProject = (projectData: Omit<Project, 'id' | 'createdAt' | 'status' | 'progress'>) => {
+  const createProject = (projectData: ProjectDraft) => {
     const newProject: Project = {
       ...projectData,
       id: `project-${Date.now()}`,
@@ -43,70 +45,69 @@ function App() {
         shots: 0,
         renders: 0,
         qa: 0,
-        assembly: 0
-      }
+        assembly: 0,
+      },
     }
 
-    setProjects(current => [...current, newProject])
+    setProjects((current) => [...current, newProject])
     setShowCreateProject(false)
-    
-    // Create pipeline request from project data
-    const request: PhysicsVideoRequest = {
+
+    setCurrentRequest({
       topic: projectData.topic,
       duration: projectData.duration,
-      level: 'intermediate', // Default level
+      level: 'intermediate',
       style: {
         colorTheme: 'scientific',
         fontStack: ['Inter', 'JetBrains Mono'],
-        motionVocabulary: 'smooth'
-      }
-    }
-    
-    setCurrentRequest(request)
-    setActiveTab("pipeline")
+        motionVocabulary: 'smooth',
+      },
+    })
+    setActiveTab('pipeline')
   }
 
   const handleUploadSequence = async (files: FileList) => {
     try {
-      const sequence = await mockUploadSequence(files)
+      const sequence = await demoUploadSequence(files)
       setCurrentSequence(sequence)
-      setActiveTab("qa-preview")
+      setActiveTab('qa-preview')
     } catch (error) {
-      console.error('Failed to upload sequence:', error)
+      console.error('Local sequence selection failed:', error)
     }
-  }
-
-  const handleStartAnalysis = () => {
-    setIsAnalyzing(true)
-    // In a real implementation, this would start the analysis process
-  }
-
-  const handleStopAnalysis = () => {
-    setIsAnalyzing(false)
-    // In a real implementation, this would stop the analysis process
   }
 
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-6">
             <div>
               <h1 className="text-2xl font-bold font-sans tracking-tight text-card-foreground">
-                Physics Video Pipeline
+                Physics Foundry
               </h1>
               <p className="text-sm text-muted-foreground mt-1">
-                Local AI-driven video production system
+                Evidence-aware scientific-media orchestration prototype
               </p>
             </div>
-            
-            <Button 
-              onClick={() => setShowCreateProject(true)}
-              className="gap-2"
-            >
+
+            <Button onClick={() => setShowCreateProject(true)} className="gap-2">
               <Plus size={16} />
-              New Project
+              New Request
             </Button>
+          </div>
+
+          <div
+            className="mt-4 rounded-md border border-border bg-muted/50 px-4 py-3 text-sm"
+            role="status"
+            aria-label="Data provenance notice"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded border border-border bg-background px-2 py-0.5 text-xs font-semibold uppercase tracking-wide">
+                Mixed provenance prototype
+              </span>
+              <span className="text-muted-foreground">
+                Pipeline and system panels read backend state. Code, QA, and alignment examples remain explicitly deterministic demos. {DATA_PROVENANCE.demo.description}
+              </span>
+            </div>
           </div>
         </div>
       </header>
@@ -114,102 +115,53 @@ function App() {
       <main className="container mx-auto px-6 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
           <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-            <TabsTrigger value="pipeline">Live Pipeline</TabsTrigger>
-            <TabsTrigger value="code">Code Workspace</TabsTrigger>
-            <TabsTrigger value="audio">Audio Sync</TabsTrigger>
-            <TabsTrigger value="qa-analysis">QA Analysis</TabsTrigger>
-            <TabsTrigger value="qa-preview">Render Preview</TabsTrigger>
-            <TabsTrigger value="system">System Monitor</TabsTrigger>
+            <TabsTrigger value="dashboard">Requests</TabsTrigger>
+            <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
+            <TabsTrigger value="code">Code Review</TabsTrigger>
+            <TabsTrigger value="audio">Audio Review</TabsTrigger>
+            <TabsTrigger value="qa-analysis">QA Demo</TabsTrigger>
+            <TabsTrigger value="qa-preview">Frame Review</TabsTrigger>
+            <TabsTrigger value="system">System</TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard" className="space-y-6">
-            <ProjectDashboard 
-              projects={projects} 
-              onUpdateProject={(updatedProject) => {
-                setProjects(current => 
-                  current.map(p => p.id === updatedProject.id ? updatedProject : p)
-                )
-              }}
-              onCreateProject={createProject}
-            />
+            <ProjectDashboard projects={projects} onCreateProject={createProject} />
           </TabsContent>
 
           <TabsContent value="pipeline" className="space-y-6">
-            <PipelineMonitor 
+            <PipelineMonitor
               request={currentRequest || undefined}
               onComplete={(videoPath) => {
-                console.log('Video generation complete:', videoPath)
-                setActiveTab("qa-preview")
+                console.log('Real pipeline completion callback:', videoPath)
+                setActiveTab('qa-preview')
               }}
             />
           </TabsContent>
 
           <TabsContent value="code" className="space-y-6">
-            <LiveCodeWorkspace 
-              onCodeUpdate={(sceneId, code) => {
-                console.log('Code updated for scene:', sceneId)
-              }}
-              onRenderRequest={(sceneId) => {
-                console.log('Render requested for scene:', sceneId)
+            <LiveCodeWorkspace
+              onCodeUpdate={(sceneId) => {
+                console.log('Local demo review state updated for scene:', sceneId)
               }}
             />
           </TabsContent>
 
           <TabsContent value="audio" className="space-y-6">
-            <AudioAlignmentWorkspace 
-              onAlignmentComplete={(alignments) => {
-                console.log('Alignment complete:', alignments)
-              }}
-            />
+            <AudioAlignmentWorkspace />
           </TabsContent>
 
           <TabsContent value="qa-analysis" className="space-y-6">
             <QAAnalysisDashboard
-              metrics={mockQAMetrics}
-              recentAnalyses={generateMockFrameAnalyses(20)}
-              isAnalyzing={isAnalyzing}
-              onStartAnalysis={handleStartAnalysis}
-              onStopAnalysis={handleStopAnalysis}
+              metrics={demoQAMetrics}
+              recentAnalyses={generateDemoFrameAnalyses(20)}
             />
           </TabsContent>
 
           <TabsContent value="qa-preview" className="space-y-6">
             <RenderPreview
-              mode="enhanced"
               sequence={currentSequence || undefined}
               onUploadSequence={handleUploadSequence}
-              onAnalyzeFrame={mockAnalyzeFrame}
-              onBatchAnalysis={async (startFrame, endFrame, config) => {
-                console.log('Batch analyzing frames', startFrame, 'to', endFrame, 'with config:', config)
-                
-                // Simulate batch processing with real-time progress
-                for (let i = startFrame; i <= Math.min(endFrame, startFrame + config.batchSize - 1); i++) {
-                  await new Promise(resolve => setTimeout(resolve, 300)) // Faster simulation
-                  await mockAnalyzeFrame(i)
-                }
-              }}
-              onCompareFrames={async (frameA, frameB) => {
-                console.log('Comparing frames', frameA, 'and', frameB)
-                
-                return {
-                  frameA,
-                  frameB,
-                  ssimScore: 0.85 + Math.random() * 0.1,
-                  differences: [
-                    {
-                      type: 'changed' as const,
-                      region: { x: 100, y: 150, width: 200, height: 100 },
-                      description: 'Mathematical equation updated'
-                    },
-                    {
-                      type: 'added' as const,
-                      region: { x: 300, y: 200, width: 150, height: 75 },
-                      description: 'New annotation layer'
-                    }
-                  ]
-                }
-              }}
+              onAnalyzeFrame={demoAnalyzeFrame}
             />
           </TabsContent>
 
@@ -219,7 +171,7 @@ function App() {
         </Tabs>
       </main>
 
-      <ProjectCreation 
+      <ProjectCreation
         open={showCreateProject}
         onOpenChange={setShowCreateProject}
         onCreateProject={createProject}
