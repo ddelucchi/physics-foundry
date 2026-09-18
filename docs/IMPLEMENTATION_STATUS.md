@@ -55,4 +55,4 @@ The next evidence milestone is issue #17: one real retained Manim artifact chain
 - closed an auxiliary-file validation-to-use gap by reserving the validated entry-script path during staging;
 - minimized the environment inherited by the Firejail parent process;
 - added behavioral tests for both contracts;
-- bounded-output streaming remains an open denial-of-service hardening item.
+- subprocess output capture is byte-bounded and covered by the canonical process-runner contract tests.
