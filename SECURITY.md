@@ -51,4 +51,4 @@ Include the affected file/path, environment assumptions, reproduction steps, and
 - auxiliary staged files cannot replace the already validated entry script;
 - the parent Firejail process is launched with a minimal explicit environment rather than inheriting arbitrary host secrets;
 - workspace traversal checks are lexical and staging occurs inside a fresh private temporary directory;
-- subprocess stdout/stderr are currently buffered in memory by the dependency-light process runner. Resource/time isolation limits execution, but an intentionally noisy child can still create memory-pressure denial-of-service risk before termination. Treat output-volume limiting as an open hardening item.
+- subprocess stdout/stderr are captured through explicit per-stream byte caps; exceeding either cap terminates the process group instead of permitting unbounded in-memory capture.
