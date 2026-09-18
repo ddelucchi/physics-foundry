@@ -43,13 +43,15 @@ The canonical UI lives under `apps/gui`; the canonical Python service lives unde
 
 ## GUI development
 
+The npm workspace and lockfile live at the repository root.
+
 ```bash
-cd apps/gui
 npm ci
 npm run lint
-npx prettier --check .
-npx vitest run
+npm run format:check
+npm test
 npm run build
+npm run dev:gui
 ```
 
 ## Orchestrator development
